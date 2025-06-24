@@ -23,10 +23,9 @@ LIVE_SOURCE_FACE = None
 TEMP_SERVER_DIR = "temp_server_files"
 os.makedirs(TEMP_SERVER_DIR, exist_ok=True)
 
-# A simple way to set execution providers for the server.
-# For a real deployment, this should come from a config file.
-# Set to ['CUDAExecutionProvider'] if you have a compatible NVIDIA GPU on the server.
-modules.globals.execution_providers = ['CPUExecutionProvider']
+# The execution provider is now set by the command-line arguments in `run.py`
+# when starting the server with `--mode server`.
+# For example: python run.py --mode server --execution-provider directml
 
 app = FastAPI(title="Deep-Live-Cam Backend Server")
 
@@ -195,7 +194,7 @@ async def websocket_live_preview(websocket: WebSocket):
                 print("Server: No source face set for single-face mode. Skipping processing.")
 
             # Encode the processed frame and send it back
-            _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85]) # Increase quality slightly
+            _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70]) # Reduced quality for faster transfer
             processed_frame_b64 = base64.b64encode(buffer).decode('utf-8')
             await websocket.send_text(processed_frame_b64)
 

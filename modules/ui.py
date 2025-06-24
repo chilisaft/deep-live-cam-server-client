@@ -988,7 +988,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 if modules.globals.live_mirror:
                     frame_to_send = cv2.flip(frame_to_send, 1)
 
-                _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 65]) # Reduced quality for faster transfer
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
                 options = {
