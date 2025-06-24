@@ -975,48 +975,56 @@ def create_networked_webcam_preview(camera_index: int) -> None:
 
         # Main loop for sending frames and updating the UI
         prev_frame_time = 0
+        frame_in_flight = False
         while not stop_event.is_set():
-            # --- Sending Part ---
-            ret, frame = cap.read()
+            # Always capture the latest frame from the camera to reduce latency
+            ret, current_frame = cap.read()
             if not ret:
                 break
 
-            if modules.globals.live_mirror:
-                frame = cv2.flip(frame, 1)
+            # --- Sending Part (conditional on not having a frame in flight) ---
+            if not frame_in_flight:
+                frame_to_send = current_frame
+                if modules.globals.live_mirror:
+                    frame_to_send = cv2.flip(frame_to_send, 1)
 
-            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+                _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            options = {
-                "many_faces": modules.globals.many_faces,
-                "map_faces": modules.globals.map_faces,
-                "color_correction": modules.globals.color_correction,
-                "mouth_mask": modules.globals.mouth_mask,
-                "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-                "fp_ui": modules.globals.fp_ui
-            }
+                options = {
+                    "many_faces": modules.globals.many_faces,
+                    "map_faces": modules.globals.map_faces,
+                    "color_correction": modules.globals.color_correction,
+                    "mouth_mask": modules.globals.mouth_mask,
+                    "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
+                    "fp_ui": modules.globals.fp_ui
+                }
 
-            payload_data = {'frame': frame_b64, 'options': options}
-            if modules.globals.map_faces:
-                payload_data['simple_map'] = modules.globals.simple_map
-            
-            ws.send(json.dumps(payload_data))
+                payload_data = {'frame': frame_b64, 'options': options}
+                if modules.globals.map_faces:
+                    payload_data['simple_map'] = modules.globals.simple_map
+                
+                try:
+                    ws.send(json.dumps(payload_data))
+                    frame_in_flight = True
+                except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
+                    stop_event.set() # Stop the loop if connection is lost
+                    continue
 
             # --- Receiving/Display Part (non-blocking) ---
             try:
                 processed_frame = frame_queue.get_nowait()
-
                 new_frame_time = time.time()
                 if prev_frame_time > 0:
                     fps = 1 / (new_frame_time - prev_frame_time)
                     if modules.globals.show_fps:
                         cv2.putText(processed_frame, f"FPS: {int(fps)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 prev_frame_time = new_frame_time
-
                 image = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
                 image = Image.fromarray(image)
                 image = ctk.CTkImage(image, size=(processed_frame.shape[1], processed_frame.shape[0]))
                 preview_label.configure(image=image)
+                frame_in_flight = False # Ready for a new frame
             except queue.Empty:
                 pass  # No new frame from the server yet
 
