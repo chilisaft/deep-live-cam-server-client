@@ -35,6 +35,9 @@ def parse_args() -> None:
     program.add_argument('-t', '--target', help='select an target image or video', dest='target_path')
     program.add_argument('-o', '--output', help='select output file or directory', dest='output_path')
     program.add_argument('--frame-processor', help='pipeline of frame processors', dest='frame_processor', default=['face_swapper'], choices=['face_swapper', 'face_enhancer'], nargs='+')
+    program.add_argument('--port', help='port for server mode', dest='port', type=int, default=8000)
+    program.add_argument('--mode', help='run in client or server mode', dest='mode', default='client', choices=['client', 'server'])
+    program.add_argument('--server-ip', help='IP address of the server for client mode', dest='server_ip', type=str, default='127.0.0.1')
     program.add_argument('--keep-fps', help='keep original fps', dest='keep_fps', action='store_true', default=False)
     program.add_argument('--keep-audio', help='keep original audio', dest='keep_audio', action='store_true', default=True)
     program.add_argument('--keep-frames', help='keep temporary frames', dest='keep_frames', action='store_true', default=False)
@@ -63,6 +66,9 @@ def parse_args() -> None:
     modules.globals.source_path = args.source_path
     modules.globals.target_path = args.target_path
     modules.globals.output_path = normalize_output_path(modules.globals.source_path, modules.globals.target_path, args.output_path)
+    modules.globals.port = args.port
+    modules.globals.mode = args.mode
+    modules.globals.server_ip = args.server_ip
     modules.globals.frame_processors = args.frame_processor
     modules.globals.headless = args.source_path or args.target_path or args.output_path
     modules.globals.keep_fps = args.keep_fps
@@ -172,46 +178,25 @@ def pre_check() -> bool:
 
 def update_status(message: str, scope: str = 'DLC.CORE') -> None:
     print(f'[{scope}] {message}')
-    if not modules.globals.headless:
+    if not modules.globals.headless and modules.globals.mode == 'client':
         ui.update_status(message)
 
-def start() -> None:
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        if not frame_processor.pre_start():
-            return
-    update_status('Processing...')
-    # process image to image
-    if has_image_extension(modules.globals.target_path):
-        if modules.globals.nsfw_filter and ui.check_and_ignore_nsfw(modules.globals.target_path, destroy):
-            return
-        try:
-            shutil.copy2(modules.globals.target_path, modules.globals.output_path)
-        except Exception as e:
-            print("Error copying file:", str(e))
-        for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-            update_status('Progressing...', frame_processor.NAME)
-            frame_processor.process_image(modules.globals.source_path, modules.globals.output_path, modules.globals.output_path)
-            release_resources()
-        if is_image(modules.globals.target_path):
-            update_status('Processing to image succeed!')
-        else:
-            update_status('Processing to image failed!')
-        return
-    # process image to videos
-    if modules.globals.nsfw_filter and ui.check_and_ignore_nsfw(modules.globals.target_path, destroy):
-        return
-
-    if not modules.globals.map_faces:
-        update_status('Creating temp resources...')
-        create_temp(modules.globals.target_path)
-        update_status('Extracting frames...')
-        extract_frames(modules.globals.target_path)
+def process_video_pipeline() -> None:
+    """
+    Executes the video processing pipeline.
+    Assumes modules.globals is already populated with source_path, target_path, output_path, and all options.
+    """
+    update_status('Creating temp resources...')
+    create_temp(modules.globals.target_path)
+    update_status('Extracting frames...')
+    extract_frames(modules.globals.target_path)
 
     temp_frame_paths = get_temp_frame_paths(modules.globals.target_path)
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
         update_status('Progressing...', frame_processor.NAME)
         frame_processor.process_video(modules.globals.source_path, temp_frame_paths)
         release_resources()
+    
     # handles fps
     if modules.globals.keep_fps:
         update_status('Detecting fps...')
@@ -221,6 +206,7 @@ def start() -> None:
     else:
         update_status('Creating video with 30.0 fps...')
         create_video(modules.globals.target_path)
+    
     # handle audio
     if modules.globals.keep_audio:
         if modules.globals.keep_fps:
@@ -230,6 +216,7 @@ def start() -> None:
         restore_audio(modules.globals.target_path, modules.globals.output_path)
     else:
         move_temp(modules.globals.target_path, modules.globals.output_path)
+    
     # clean and validate
     clean_temp(modules.globals.target_path)
     if is_video(modules.globals.target_path):
@@ -237,7 +224,58 @@ def start() -> None:
     else:
         update_status('Processing to video failed!')
 
+def process_image_pipeline() -> None:
+    """
+    Executes the image processing pipeline.
+    Assumes modules.globals is already populated with source_path, target_path, output_path, and all options.
+    """
+    update_status('Processing image...', 'DLC.CORE')
+    # Copy target to output path first, as processors modify in-place
+    try:
+        shutil.copy2(modules.globals.target_path, modules.globals.output_path)
+    except Exception as e:
+        update_status(f"Error copying target image to output path: {e}", 'DLC.CORE')
+        return
 
+    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+        update_status('Progressing...', frame_processor.NAME)
+        frame_processor.process_image(modules.globals.source_path, modules.globals.output_path, modules.globals.output_path)
+        release_resources()
+
+    if is_image(modules.globals.output_path): # Check if output is an image
+        update_status('Processing to image succeed!', 'DLC.CORE')
+    else:
+        update_status('Processing to image failed!', 'DLC.CORE')
+
+
+def start() -> None:
+    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+        if not frame_processor.pre_start():
+            return
+    update_status('Processing...')
+    # process image to image
+    if has_image_extension(modules.globals.target_path):
+        process_image_pipeline()
+    elif is_video(modules.globals.target_path):
+        process_video_pipeline()
+    else:
+        update_status("Unsupported target type for local batch processing.", 'DLC.CORE')
+
+
+def initiate_batch_job_client_side() -> None:
+    """
+    Client-side function to initiate a batch processing job on the server.
+    This is called by the UI or headless client.
+    """
+    # This function will be called by the UI's select_output_path or headless mode.
+    # It will gather options and call api_client.initiate_batch_processing.
+    # The actual implementation is in modules/ui.py and modules/api_client.py
+    # This placeholder is for conceptual clarity and to match the previous diff structure.
+    update_status("Initiating batch job via API client...", 'DLC.CLIENT')
+    # The real logic for gathering options and calling API is in ui.select_output_path
+    # and api_client.initiate_batch_processing.
+    # This function itself doesn't need to do anything here, as the UI handles the call.
+    pass
 def destroy(to_quit=True) -> None:
     if modules.globals.target_path:
         clean_temp(modules.globals.target_path)
@@ -252,8 +290,16 @@ def run() -> None:
         if not frame_processor.pre_check():
             return
     limit_resources()
-    if modules.globals.headless:
-        start()
-    else:
-        window = ui.init(start, destroy, modules.globals.lang)
-        window.mainloop()
+    if modules.globals.mode == 'server': # Server mode
+        from api.main import app # Import server components only when in server mode
+        import uvicorn
+        update_status('Starting server...', 'DLC.SERVER')
+        uvicorn.run(app, host="0.0.0.0", port=modules.globals.port) # Start the FastAPI server with dynamic port
+    else:  # Client mode
+        if modules.globals.headless: # Headless client mode (CLI)
+            update_status("Running in headless client mode.", 'DLC.CLIENT')
+            initiate_batch_job_client_side() # Trigger the client-side job initiation
+            update_status("Headless client job finished.", 'DLC.CLIENT')
+        else: # UI client mode
+            window = ui.init(initiate_batch_job_client_side, destroy, modules.globals.lang) # Initialize the UI, passing the new initiator
+            window.mainloop() # Start the UI event loop

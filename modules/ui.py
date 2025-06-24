@@ -6,9 +6,15 @@ import cv2
 from cv2_enumerate_cameras import enumerate_cameras  # Add this import
 from PIL import Image, ImageOps
 import time
+import numpy as np
 import json
 import modules.globals
+import base64 # Add this import
 import modules.metadata
+import websocket # Add this import
+import threading
+import queue
+import modules.api_client as api_client
 from modules.face_analyser import (
     get_one_face,
     get_unique_faces_from_target_image,
@@ -379,6 +385,12 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         "<Button>", lambda event: webbrowser.open("https://deeplivecam.net")
     )
 
+    # Check server connection on startup and update status label
+    if api_client.check_server_status():
+        status_label.configure(text=_("Connected to backend server."))
+    else:
+        status_label.configure(text=_("Could not connect to backend server!"))
+
     return root
 
 def close_mapper_window():
@@ -397,19 +409,20 @@ def analyze_target(start: Callable[[], None], root: ctk.CTk):
         return
 
     if modules.globals.map_faces:
-        modules.globals.source_target_map = []
+        if not modules.globals.target_path:
+            update_status("Please select a target first.")
+            return
 
-        if is_image(modules.globals.target_path):
-            update_status("Getting unique faces")
-            get_unique_faces_from_target_image()
-        elif is_video(modules.globals.target_path):
-            update_status("Getting unique faces")
-            get_unique_faces_from_target_video()
+        update_status("Requesting face analysis from server...")
+        # Call the API client instead of local functions
+        source_target_map = api_client.request_face_analysis(modules.globals.target_path)
+        modules.globals.source_target_map = source_target_map  # Store result in globals for the popup
 
-        if len(modules.globals.source_target_map) > 0:
-            create_source_target_popup(start, root, modules.globals.source_target_map)
+        if source_target_map:
+            update_status(f"Found {len(source_target_map)} unique faces.")
+            create_source_target_popup(start, root, source_target_map)
         else:
-            update_status("No faces found in target")
+            update_status("No faces found in target or server error.")
     else:
         select_output_path(start)
 
@@ -670,7 +683,40 @@ def select_output_path(start: Callable[[], None]) -> None:
     if output_path:
         modules.globals.output_path = output_path
         RECENT_DIRECTORY_OUTPUT = os.path.dirname(modules.globals.output_path)
-        start()
+        
+        # Gather all relevant options from modules.globals
+        options = {
+            "frame_processors": modules.globals.frame_processors,
+            "keep_fps": modules.globals.keep_fps,
+            "keep_audio": modules.globals.keep_audio,
+            "keep_frames": modules.globals.keep_frames,
+            "many_faces": modules.globals.many_faces,
+            "map_faces": modules.globals.map_faces,
+            "color_correction": modules.globals.color_correction,
+            "nsfw_filter": modules.globals.nsfw_filter,
+            "video_encoder": modules.globals.video_encoder,
+            "video_quality": modules.globals.video_quality,
+            "mouth_mask": modules.globals.mouth_mask,
+            "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
+            "simple_map": modules.globals.simple_map # For mapped faces
+        }
+
+        update_status("Sending job to server...")
+        response = api_client.initiate_batch_processing(
+            modules.globals.source_path,
+            modules.globals.target_path,
+            options
+        )
+
+        if response.get("job_id"):
+            job_id = response["job_id"]
+            update_status(f"Job {job_id} initiated on server. Downloading result...")
+            if api_client.download_processed_result(job_id, modules.globals.output_path):
+                update_status(f"Job {job_id} completed and result downloaded to {modules.globals.output_path}")
+            else:
+                update_status(f"Failed to download result for job {job_id}.")
+        else:
+            update_status(f"Server failed to initiate job: {response.get('message', 'Unknown error')}")
 
 
 def check_and_ignore_nsfw(target, destroy: Callable = None) -> bool:
@@ -787,14 +833,21 @@ def webcam_preview(root: ctk.CTk, camera_index: int):
 
     if not modules.globals.map_faces:
         if modules.globals.source_path is None:
-            update_status("Please select a source image first")
+            update_status("Please select a source image first.")
             return
-        create_webcam_preview(camera_index)
+        
+        # Set the source face on the server before starting the preview (for single face mode)
+        update_status("Setting source face on server...")
+        if not api_client.set_live_source(modules.globals.source_path):
+            update_status("Could not set source face on server. Check server logs.")
+            return
+        
+        # Call the refactored preview function
+        create_networked_webcam_preview(camera_index)
     else:
-        modules.globals.source_target_map = []
-        create_source_target_popup_for_webcam(
-            root, modules.globals.source_target_map, camera_index
-        )
+        # Multi-face mapping is handled by sending simple_map in the WebSocket payload
+        update_status("Starting live preview with multi-face mapping...")
+        create_networked_webcam_preview(camera_index)
 
 
 
@@ -868,97 +921,119 @@ def get_available_cameras():
         return camera_indices, camera_names
 
 
-def create_webcam_preview(camera_index: int):
-    global preview_label, PREVIEW
+def create_networked_webcam_preview(camera_index: int) -> None:
+    """
+    Starts a high-performance, asynchronous live preview using WebSockets.
 
-    cap = VideoCapturer(camera_index)
-    if not cap.start(PREVIEW_DEFAULT_WIDTH, PREVIEW_DEFAULT_HEIGHT, 60):
-        update_status("Failed to start camera")
-        return
+    This function decouples sending and receiving frames into separate threads
+    to avoid blocking the UI and to maximize throughput.
+    """
+    global PREVIEW, preview_label, ROOT
+    ws = None
+    cap = None
+    stop_event = threading.Event()
+    frame_queue = queue.Queue(maxsize=2)  # Use a queue to pass frames from receiver to main thread
 
-    preview_label.configure(width=PREVIEW_DEFAULT_WIDTH, height=PREVIEW_DEFAULT_HEIGHT)
-    PREVIEW.deiconify()
+    def receiver_thread(ws_socket: websocket.WebSocket, q: queue.Queue, stop: threading.Event) -> None:
+        """Listens for incoming messages from the server and puts them in a queue."""
+        while not stop.is_set():
+            try:
+                result_b64 = ws_socket.recv()
+                if not result_b64:
+                    break
+                img_data = base64.b64decode(result_b64)
+                np_arr = np.frombuffer(img_data, np.uint8)
+                processed_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-    frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
-    source_image = None
-    prev_time = time.time()
-    fps_update_interval = 0.5
-    frame_count = 0
-    fps = 0
+                if q.full():
+                    q.get_nowait()  # Discard the oldest frame if the queue is full
+                q.put(processed_frame)
+            except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
+                update_status("Connection to server lost.")
+                break
+            except Exception as e:
+                print(f"Receiver thread error: {e}")
+                break
+        stop.set() # Signal the main loop to stop
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        ws_url = f"ws://{api_client.get_server_url().split('//')[1]}/ws/live-preview"
+        update_status(f"Connecting to {ws_url}...")
+        ws = websocket.create_connection(ws_url, timeout=5)
+        update_status("Connected to live preview server.")
 
-        temp_frame = frame.copy()
+        cap = VideoCapturer(camera_index)
+        if not cap.start(PREVIEW_DEFAULT_WIDTH, PREVIEW_DEFAULT_HEIGHT, 60):
+            raise RuntimeError("Failed to start camera")
 
-        if modules.globals.live_mirror:
-            temp_frame = cv2.flip(temp_frame, 1)
+        # Start the receiver thread
+        receiver = threading.Thread(target=receiver_thread, args=(ws, frame_queue, stop_event))
+        receiver.start()
 
-        if modules.globals.live_resizable:
-            temp_frame = fit_image_to_size(
-                temp_frame, PREVIEW.winfo_width(), PREVIEW.winfo_height()
-            )
+        preview_label.configure(width=PREVIEW_DEFAULT_WIDTH, height=PREVIEW_DEFAULT_HEIGHT)
+        PREVIEW.deiconify()
 
-        else:
-            temp_frame = fit_image_to_size(
-                temp_frame, PREVIEW.winfo_width(), PREVIEW.winfo_height()
-            )
+        # Main loop for sending frames and updating the UI
+        prev_frame_time = 0
+        while not stop_event.is_set():
+            # --- Sending Part ---
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        if not modules.globals.map_faces:
-            if source_image is None and modules.globals.source_path:
-                source_image = get_one_face(cv2.imread(modules.globals.source_path))
+            if modules.globals.live_mirror:
+                frame = cv2.flip(frame, 1)
 
-            for frame_processor in frame_processors:
-                if frame_processor.NAME == "DLC.FACE-ENHANCER":
-                    if modules.globals.fp_ui["face_enhancer"]:
-                        temp_frame = frame_processor.process_frame(None, temp_frame)
-                else:
-                    temp_frame = frame_processor.process_frame(source_image, temp_frame)
-        else:
-            modules.globals.target_path = None
-            for frame_processor in frame_processors:
-                if frame_processor.NAME == "DLC.FACE-ENHANCER":
-                    if modules.globals.fp_ui["face_enhancer"]:
-                        temp_frame = frame_processor.process_frame_v2(temp_frame)
-                else:
-                    temp_frame = frame_processor.process_frame_v2(temp_frame)
+            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
-        # Calculate and display FPS
-        current_time = time.time()
-        frame_count += 1
-        if current_time - prev_time >= fps_update_interval:
-            fps = frame_count / (current_time - prev_time)
-            frame_count = 0
-            prev_time = current_time
+            options = {
+                "many_faces": modules.globals.many_faces,
+                "map_faces": modules.globals.map_faces,
+                "color_correction": modules.globals.color_correction,
+                "mouth_mask": modules.globals.mouth_mask,
+                "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
+                "fp_ui": modules.globals.fp_ui
+            }
 
-        if modules.globals.show_fps:
-            cv2.putText(
-                temp_frame,
-                f"FPS: {fps:.1f}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2,
-            )
+            payload_data = {'frame': frame_b64, 'options': options}
+            if modules.globals.map_faces:
+                payload_data['simple_map'] = modules.globals.simple_map
+            
+            ws.send(json.dumps(payload_data))
 
-        image = cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(image)
-        image = ImageOps.contain(
-            image, (temp_frame.shape[1], temp_frame.shape[0]), Image.LANCZOS
-        )
-        image = ctk.CTkImage(image, size=image.size)
-        preview_label.configure(image=image)
-        ROOT.update()
+            # --- Receiving/Display Part (non-blocking) ---
+            try:
+                processed_frame = frame_queue.get_nowait()
 
-        if PREVIEW.state() == "withdrawn":
-            break
+                new_frame_time = time.time()
+                if prev_frame_time > 0:
+                    fps = 1 / (new_frame_time - prev_frame_time)
+                    if modules.globals.show_fps:
+                        cv2.putText(processed_frame, f"FPS: {int(fps)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                prev_frame_time = new_frame_time
 
-    cap.release()
-    PREVIEW.withdraw()
+                image = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(image)
+                image = ctk.CTkImage(image, size=(processed_frame.shape[1], processed_frame.shape[0]))
+                preview_label.configure(image=image)
+            except queue.Empty:
+                pass  # No new frame from the server yet
 
+            ROOT.update()
+            if PREVIEW.state() == "withdrawn":
+                break
+
+    except Exception as e:
+        update_status(f"Live preview error: {e}")
+    finally:
+        stop_event.set()
+        if ws:
+            ws.close()
+        if cap:
+            cap.release()
+        PREVIEW.withdraw()
+        update_status("Live preview stopped.")
 
 def create_source_target_popup_for_webcam(
         root: ctk.CTk, map: list, camera_index: int
@@ -974,7 +1049,7 @@ def create_source_target_popup_for_webcam(
         if has_valid_map():
             simplify_maps()
             update_pop_live_status("Mappings successfully submitted!")
-            create_webcam_preview(camera_index)  # Open the preview window
+            create_networked_webcam_preview(camera_index)  # Open the preview window
         else:
             update_pop_live_status("At least 1 source with target is required!")
 

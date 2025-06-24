@@ -73,16 +73,16 @@ def add_blank_map() -> Any:
     except ValueError:
         return None
     
-def get_unique_faces_from_target_image() -> Any:
+def get_unique_faces_from_target_image(target_path: str) -> list:
+    source_target_map = []
     try:
-        modules.globals.source_target_map = []
-        target_frame = cv2.imread(modules.globals.target_path)
+        target_frame = cv2.imread(target_path)
         many_faces = get_many_faces(target_frame)
         i = 0
 
         for face in many_faces:
             x_min, y_min, x_max, y_max = face['bbox']
-            modules.globals.source_target_map.append({
+            source_target_map.append({
                 'id' : i, 
                 'target' : {
                             'cv2' : target_frame[int(y_min):int(y_max), int(x_min):int(x_max)],
@@ -90,23 +90,24 @@ def get_unique_faces_from_target_image() -> Any:
                             }
                 })
             i = i + 1
+        return source_target_map
     except ValueError:
-        return None
+        return []
     
     
-def get_unique_faces_from_target_video() -> Any:
+def get_unique_faces_from_target_video(target_path: str) -> list:
     try:
-        modules.globals.source_target_map = []
+        source_target_map = []
         frame_face_embeddings = []
         face_embeddings = []
     
         print('Creating temp resources...')
-        clean_temp(modules.globals.target_path)
-        create_temp(modules.globals.target_path)
+        clean_temp(target_path)
+        create_temp(target_path)
         print('Extracting frames...')
-        extract_frames(modules.globals.target_path)
+        extract_frames(target_path)
 
-        temp_frame_paths = get_temp_frame_paths(modules.globals.target_path)
+        temp_frame_paths = get_temp_frame_paths(target_path)
 
         i = 0
         for temp_frame_path in tqdm(temp_frame_paths, desc="Extracting face embeddings from frames"):
@@ -127,7 +128,7 @@ def get_unique_faces_from_target_video() -> Any:
                 face['target_centroid'] = closest_centroid_index
 
         for i in range(len(centroids)):
-            modules.globals.source_target_map.append({
+            source_target_map.append({
                 'id' : i
             })
 
@@ -135,25 +136,26 @@ def get_unique_faces_from_target_video() -> Any:
             for frame in tqdm(frame_face_embeddings, desc=f"Mapping frame embeddings to centroids-{i}"):
                 temp.append({'frame': frame['frame'], 'faces': [face for face in frame['faces'] if face['target_centroid'] == i], 'location': frame['location']})
 
-            modules.globals.source_target_map[i]['target_faces_in_frame'] = temp
+            source_target_map[i]['target_faces_in_frame'] = temp
 
         # dump_faces(centroids, frame_face_embeddings)
-        default_target_face()
+        default_target_face(source_target_map)
+        return source_target_map
     except ValueError:
-        return None
+        return []
     
 
-def default_target_face():
-    for map in modules.globals.source_target_map:
+def default_target_face(source_target_map: list):
+    for map_item in source_target_map:
         best_face = None
         best_frame = None
-        for frame in map['target_faces_in_frame']:
+        for frame in map_item['target_faces_in_frame']:
             if len(frame['faces']) > 0:
                 best_face = frame['faces'][0]
                 best_frame = frame
                 break
 
-        for frame in map['target_faces_in_frame']:
+        for frame in map_item['target_faces_in_frame']:
             for face in frame['faces']:
                 if face['det_score'] > best_face['det_score']:
                     best_face = face
@@ -162,7 +164,7 @@ def default_target_face():
         x_min, y_min, x_max, y_max = best_face['bbox']
 
         target_frame = cv2.imread(best_frame['location'])
-        map['target'] = {
+        map_item['target'] = {
                         'cv2' : target_frame[int(y_min):int(y_max), int(x_min):int(x_max)],
                         'face' : best_face
                         }

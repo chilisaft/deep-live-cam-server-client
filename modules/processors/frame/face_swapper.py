@@ -3,6 +3,7 @@ import cv2
 import insightface
 import threading
 import numpy as np
+import logging # Ensure logging is imported
 import modules.globals
 import logging
 import modules.processors.frame.core
@@ -63,6 +64,7 @@ def get_face_swapper() -> Any:
             model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
             FACE_SWAPPER = insightface.model_zoo.get_model(
                 model_path, providers=modules.globals.execution_providers
+                # Ensure providers are correctly passed and supported by your ONNX Runtime installation
             )
     return FACE_SWAPPER
 
@@ -70,10 +72,26 @@ def get_face_swapper() -> Any:
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     face_swapper = get_face_swapper()
 
-    # Apply the face swap
-    swapped_frame = face_swapper.get(
-        temp_frame, target_face, source_face, paste_back=True
-    )
+    # Defensive check: Ensure temp_frame is in the correct format (BGR, uint8)
+    if temp_frame.dtype != np.uint8:
+        temp_frame = temp_frame.astype(np.uint8)
+    if len(temp_frame.shape) == 2: # Grayscale, convert to BGR
+        temp_frame = cv2.cvtColor(temp_frame, cv2.COLOR_GRAY2BGR)
+
+    try:
+        # Apply the face swap
+        swapped_frame = face_swapper.get(
+            temp_frame, target_face, source_face, paste_back=True
+        )
+        if swapped_frame is None:
+            logging.error("face_swapper.get() returned None. Swap failed.")
+            return temp_frame # Return original frame if swap fails
+        # Optional: Check if the swapped_frame is mostly black (e.g., all zeros)
+        if np.all(swapped_frame == 0):
+            logging.warning("face_swapper.get() returned an all-black frame. Check model output or input data.")
+    except Exception as e:
+        logging.error(f"Error during face swap: {e}. Returning original frame.")
+        return temp_frame # Return original frame on error
 
     if modules.globals.mouth_mask:
         # Create a mask for the target face
@@ -98,24 +116,29 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     return swapped_frame
 
 
-def process_frame(source_face: Face, temp_frame: Frame) -> Frame:
-    if modules.globals.color_correction:
-        temp_frame = cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB)
+def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None) -> Frame:
+    # If target_faces are not provided, detect them here (fallback for non-live/other calls)
+    if target_faces is None:
+        if modules.globals.many_faces:
+            target_faces = get_many_faces(temp_frame)
+        else:
+            target_faces = [get_one_face(temp_frame)]
 
     if modules.globals.many_faces:
-        many_faces = get_many_faces(temp_frame)
-        if many_faces:
-            for target_face in many_faces:
+        if target_faces:
+            for target_face in target_faces: # Use the provided/detected target_faces
                 if source_face and target_face:
                     temp_frame = swap_face(source_face, target_face, temp_frame)
                 else:
                     print("Face detection failed for target/source.")
     else:
-        target_face = get_one_face(temp_frame)
-        if target_face and source_face:
-            temp_frame = swap_face(source_face, target_face, temp_frame)
-        else:
-            logging.error("Face detection failed for target or source.")
+        # For single face mode, we expect target_faces to contain at most one face
+        if target_faces and target_faces[0] and source_face:
+            temp_frame = swap_face(source_face, target_faces[0], temp_frame)
+        elif not (target_faces and target_faces[0]): # No target face detected
+            logging.warning("No target face detected in frame for single-face swap (from pre-detected list).")
+        else: # source_face is None
+            logging.error("Source face is None. Cannot perform swap.")
     return temp_frame
 
 
