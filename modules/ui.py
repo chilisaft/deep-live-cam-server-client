@@ -831,22 +831,23 @@ def webcam_preview(root: ctk.CTk, camera_index: int):
         POPUP_LIVE.focus()
         return
 
-    if not modules.globals.map_faces:
+    if modules.globals.map_faces:
+        # For multi-face, we must first open the mapper UI to define the mappings.
+        # If the map is empty, add a default blank entry to start with.
+        if not modules.globals.source_target_map:
+            add_blank_map()
+        create_source_target_popup_for_webcam(root, modules.globals.source_target_map, camera_index)
+    else:
+        # For single-face mode, ensure a source is selected and set it on the server.
         if modules.globals.source_path is None:
             update_status("Please select a source image first.")
             return
-        
-        # Set the source face on the server before starting the preview (for single face mode)
+
         update_status("Setting source face on server...")
         if not api_client.set_live_source(modules.globals.source_path):
             update_status("Could not set source face on server. Check server logs.")
             return
-        
-        # Call the refactored preview function
-        create_networked_webcam_preview(camera_index)
-    else:
-        # Multi-face mapping is handled by sending simple_map in the WebSocket payload
-        update_status("Starting live preview with multi-face mapping...")
+
         create_networked_webcam_preview(camera_index)
 
 

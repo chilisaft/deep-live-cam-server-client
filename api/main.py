@@ -7,7 +7,7 @@ import asyncio
 import numpy as np
 import uuid # Add this import
 import json
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, BackgroundTasks, Form
 from fastapi.responses import JSONResponse
 
 # Add project root to path to allow importing modules
@@ -124,6 +124,109 @@ async def set_live_source_endpoint(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Server Error on /set-live-source: {e}")
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+
+JOBS = {} # To store job status and results
+
+def process_batch_job_sync(job_id: str, source_path: str, target_path: str, output_path: str, options: dict):
+    """
+    The core processing logic for a batch job. Runs in a background thread.
+    This function temporarily modifies modules.globals for the processing functions to work.
+    """
+    # Import utilities here to avoid circular dependencies at startup
+    from modules.utilities import create_temp, extract_frames, get_temp_frame_paths, detect_fps, create_video, restore_audio, move_temp, clean_temp
+
+    # Store original global values to restore them later
+    original_globals = {
+        'source_path': modules.globals.source_path,
+        'target_path': modules.globals.target_path,
+        'output_path': modules.globals.output_path,
+    }
+    for key in options.keys():
+        if hasattr(modules.globals, key):
+            original_globals[key] = getattr(modules.globals, key)
+
+    try:
+        # Set globals for this specific job
+        modules.globals.source_path = source_path
+        modules.globals.target_path = target_path
+        modules.globals.output_path = output_path
+        for key, value in options.items():
+            if hasattr(modules.globals, key):
+                setattr(modules.globals, key, value)
+
+        if is_image(target_path):
+            shutil.copy2(target_path, output_path)
+            for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+                frame_processor.process_image(source_path, output_path, output_path)
+        elif is_video(target_path):
+            create_temp(target_path)
+            extract_frames(target_path)
+            temp_frame_paths = get_temp_frame_paths(target_path)
+            
+            for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+                frame_processor.process_video(source_path, temp_frame_paths)
+            
+            if modules.globals.keep_fps:
+                fps = detect_fps(target_path)
+                create_video(target_path, fps)
+            else:
+                create_video(target_path, 30.0)
+
+            if modules.globals.keep_audio:
+                restore_audio(target_path, output_path)
+            else:
+                move_temp(target_path, output_path)
+            
+            clean_temp(target_path) # This function respects modules.globals.keep_frames
+        
+        JOBS[job_id]['status'] = 'completed'
+        JOBS[job_id]['result_path'] = output_path
+
+    except Exception as e:
+        print(f"Job {job_id} failed: {e}")
+        JOBS[job_id]['status'] = 'failed'
+        JOBS[job_id]['error'] = str(e)
+    finally:
+        # Restore original globals to not affect other server operations
+        for key, value in original_globals.items():
+            setattr(modules.globals, key, value)
+        
+        # Clean up temporary source and target files
+        if os.path.exists(source_path):
+            os.remove(source_path)
+        if os.path.exists(target_path):
+            os.remove(target_path)
+
+@app.post("/process-batch-job")
+async def process_batch_job_endpoint(background_tasks: BackgroundTasks, source_file: UploadFile = File(...), target_file: UploadFile = File(...), options: str = Form(...)):
+    job_id = str(uuid.uuid4())
+    options_dict = json.loads(options)
+    source_path = os.path.join(TEMP_SERVER_DIR, f"{job_id}_{source_file.filename}")
+    target_path = os.path.join(TEMP_SERVER_DIR, f"{job_id}_{target_file.filename}")
+    with open(source_path, "wb") as buffer:
+        shutil.copyfileobj(source_file.file, buffer)
+    with open(target_path, "wb") as buffer:
+        shutil.copyfileobj(target_file.file, buffer)
+    _, target_extension = os.path.splitext(target_file.filename)
+    output_path = os.path.join(TEMP_SERVER_DIR, f"{job_id}_output{target_extension}")
+    JOBS[job_id] = {"status": "processing", "result_path": None, "error": None}
+    background_tasks.add_task(process_batch_job_sync, job_id, source_path, target_path, output_path, options_dict)
+    return {"message": "Job initiated", "job_id": job_id}
+
+@app.get("/download-result/{job_id}")
+async def download_result_endpoint(job_id: str):
+    from fastapi.responses import FileResponse
+    job = JOBS.get(job_id)
+    if not job:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+    if job['status'] == 'processing':
+        return JSONResponse(status_code=202, content={"message": "Job is still processing"})
+    if job['status'] == 'failed':
+        return JSONResponse(status_code=500, content={"message": f"Job failed: {job['error']}"})
+    if job['status'] == 'completed' and job['result_path'] and os.path.exists(job['result_path']):
+        return FileResponse(job['result_path'], media_type='application/octet-stream', filename=os.path.basename(job['result_path']))
+    return JSONResponse(status_code=404, content={"message": "Result file not found"})
 
 class LatestFrame:
     """
