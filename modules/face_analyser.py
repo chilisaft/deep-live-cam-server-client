@@ -11,17 +11,19 @@ from modules.typing import Frame
 from modules.cluster_analysis import find_cluster_centroids, find_closest_centroid
 from modules.utilities import get_temp_directory_path, create_temp, extract_frames, clean_temp, get_temp_frame_paths
 from pathlib import Path
+import threading
 
-FACE_ANALYSER = None
+# Use thread-local storage for the FaceAnalyser instance
+_thread_local_analyser = threading.local()
 
 
 def get_face_analyser() -> Any:
-    global FACE_ANALYSER
-
-    if FACE_ANALYSER is None:
-        FACE_ANALYSER = insightface.app.FaceAnalysis(name='buffalo_l', providers=modules.globals.execution_providers)
-        FACE_ANALYSER.prepare(ctx_id=0, det_size=(640, 640))
-    return FACE_ANALYSER
+    # Check if the analyser is already initialized for the current thread
+    if not hasattr(_thread_local_analyser, "analyser") or _thread_local_analyser.analyser is None:
+        # Initialize the analyser for this thread
+        _thread_local_analyser.analyser = insightface.app.FaceAnalysis(name='buffalo_l', providers=modules.globals.execution_providers)
+        _thread_local_analyser.analyser.prepare(ctx_id=0, det_size=(640, 640))
+    return _thread_local_analyser.analyser
 
 
 def get_one_face(frame: Frame) -> Any:
