@@ -7,7 +7,6 @@ import logging # Ensure logging is imported
 import modules.globals
 import logging
 import modules.processors.frame.core
-from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces, default_source_face
 from modules.typing import Face, Frame
 from modules.utilities import (
@@ -39,6 +38,7 @@ def pre_check() -> bool:
 
 
 def pre_start() -> bool:
+    from modules.core import update_status
     if not modules.globals.map_faces and not is_image(modules.globals.source_path):
         update_status("Select an image for source path.", NAME)
         return False
@@ -257,6 +257,7 @@ def process_frames(
 
 
 def process_image(source_path: str, target_path: str, output_path: str) -> None:
+    from modules.core import update_status
     if not modules.globals.map_faces:
         source_face = get_one_face(cv2.imread(source_path))
         target_frame = cv2.imread(target_path)
@@ -273,6 +274,7 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
 
 
 def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
+    from modules.core import update_status
     if modules.globals.map_faces and modules.globals.many_faces:
         update_status(
             "Many faces enabled. Using first source image. Progressing...", NAME
