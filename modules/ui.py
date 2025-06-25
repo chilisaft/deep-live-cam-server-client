@@ -982,31 +982,31 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 break
 
             # --- Sending Part (unconditional streaming) ---
-                frame_to_send = current_frame
-                if modules.globals.live_mirror:
-                    frame_to_send = cv2.flip(frame_to_send, 1)
+            frame_to_send = current_frame
+            if modules.globals.live_mirror:
+                frame_to_send = cv2.flip(frame_to_send, 1)
 
-                _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 65]) # Reduced quality for faster transfer
-                frame_b64 = base64.b64encode(buffer).decode('utf-8')
+            _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 65]) # Reduced quality for faster transfer
+            frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
-                options = {
-                    "many_faces": modules.globals.many_faces,
-                    "map_faces": modules.globals.map_faces,
-                    "color_correction": modules.globals.color_correction,
-                    "mouth_mask": modules.globals.mouth_mask,
-                    "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-                    "fp_ui": modules.globals.fp_ui
-                }
+            options = {
+                "many_faces": modules.globals.many_faces,
+                "map_faces": modules.globals.map_faces,
+                "color_correction": modules.globals.color_correction,
+                "mouth_mask": modules.globals.mouth_mask,
+                "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
+                "fp_ui": modules.globals.fp_ui
+            }
 
-                payload_data = {'frame': frame_b64, 'options': options}
-                if modules.globals.map_faces:
-                    payload_data['simple_map'] = modules.globals.simple_map
-                
-                try:
-                    ws.send(json.dumps(payload_data))
-                except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
-                    stop_event.set() # Stop the loop if connection is lost
-                    continue
+            payload_data = {'frame': frame_b64, 'options': options}
+            if modules.globals.map_faces:
+                payload_data['simple_map'] = modules.globals.simple_map
+            
+            try:
+                ws.send(json.dumps(payload_data))
+            except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
+                stop_event.set() # Stop the loop if connection is lost
+                continue
 
             # --- Receiving/Display Part (non-blocking) ---
             try:
