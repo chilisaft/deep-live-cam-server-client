@@ -18,6 +18,13 @@ from modules.face_analyser import get_one_face, get_unique_faces_from_target_ima
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video
 
+# Attempt to pre-load the face enhancer module to make it available for dynamic use.
+# This can help avoid "not found" errors during live preview on some systems.
+try:
+    import modules.processors.frame.face_enhancer
+except ImportError as e:
+    print(f"Warning: Could not pre-load face_enhancer module: {e}")
+
 # --- Globals for Server State ---
 LIVE_SOURCE_FACE = None
 # LIVE_SIMPLE_MAP = None # Not needed, we'll use modules.globals.simple_map directly
@@ -157,14 +164,23 @@ def process_batch_job_sync(job_id: str, source_path: str, target_path: str, outp
 
         if is_image(target_path):
             shutil.copy2(target_path, output_path)
-            for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+
+            active_processors = modules.globals.frame_processors.copy()
+            if modules.globals.fp_ui.get('face_enhancer'):
+                active_processors.append('face_enhancer')
+
+            for frame_processor in get_frame_processors_modules(active_processors):
                 frame_processor.process_image(source_path, output_path, output_path)
         elif is_video(target_path):
             create_temp(target_path)
             extract_frames(target_path)
             temp_frame_paths = get_temp_frame_paths(target_path)
             
-            for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+            active_processors = modules.globals.frame_processors.copy()
+            if modules.globals.fp_ui.get('face_enhancer'):
+                active_processors.append('face_enhancer')
+
+            for frame_processor in get_frame_processors_modules(active_processors):
                 frame_processor.process_video(source_path, temp_frame_paths)
             
             if modules.globals.keep_fps:
