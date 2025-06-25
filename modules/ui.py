@@ -963,7 +963,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
         update_status("Connected to live preview server.")
 
         cap = VideoCapturer(camera_index)
-        if not cap.start(PREVIEW_DEFAULT_WIDTH, PREVIEW_DEFAULT_HEIGHT, 30):
+        if not cap.start(PREVIEW_DEFAULT_WIDTH, PREVIEW_DEFAULT_HEIGHT, 60):
             raise RuntimeError("Failed to start camera")
 
         # Start the receiver thread
