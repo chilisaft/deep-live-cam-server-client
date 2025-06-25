@@ -3,7 +3,6 @@ import os
 import shutil
 import base64
 import cv2
-import asyncio
 import numpy as np
 import uuid # Add this import
 import json
@@ -133,67 +132,70 @@ async def websocket_live_preview(websocket: WebSocket):
     """
     await websocket.accept()
     try:
+        # Initialize FACE_ANALYSER once per connection or ensure it's initialized globally
         from modules.face_analyser import get_face_analyser
-        get_face_analyser() # Ensure analyser is initialized in the main thread
+        face_analyser_instance = get_face_analyser()
 
         while True:
             data = await websocket.receive_text()
+            payload = json.loads(data)
 
-            def process_and_encode_sync(payload_data: str) -> str:
-                """
-                Synchronous function to handle all CPU-bound processing.
-                This will be run in a separate thread to avoid blocking the asyncio event loop.
-                """
-                payload = json.loads(payload_data)
+            # Update server's global state with client's options
+            options = payload.get('options', {})
+            for key, value in options.items():
+                if hasattr(modules.globals, key):
+                    setattr(modules.globals, key, value)
+            if 'fp_ui' in options:
+                modules.globals.fp_ui = options['fp_ui']
 
-                # Update server's global state with client's options
-                options = payload.get('options', {})
-                for key, value in options.items():
-                    if hasattr(modules.globals, key):
-                        setattr(modules.globals, key, value)
-                if 'fp_ui' in options:
-                    modules.globals.fp_ui = options['fp_ui']
+            # Update server's global simple_map if provided (for multi-face live)
+            if 'simple_map' in payload:
+                modules.globals.simple_map = payload['simple_map']
 
-                if 'simple_map' in payload:
-                    modules.globals.simple_map = payload['simple_map']
+            # Decode the frame
+            frame_b64 = payload['frame']
+            img_data = base64.b64decode(frame_b64)
+            np_arr = np.frombuffer(img_data, np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            processed_frame = frame # Initialize processed_frame with the original frame
 
-                # Decode the frame
-                frame_b64 = payload['frame']
-                img_data = base64.b64decode(frame_b64)
-                np_arr = np.frombuffer(img_data, np.uint8)
-                frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                processed_frame = frame
+            frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
 
-                frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
+            if modules.globals.map_faces:
+                # Multi-face mapping for live preview
+                if modules.globals.simple_map: # Ensure simple_map is populated on the server
+                    # Ensure the face analyser is ready for multi-face processing
+                    from modules.face_analyser import get_face_analyser
+                    get_face_analyser() # Initialize if not already
 
-                if modules.globals.map_faces:
-                    if modules.globals.simple_map:
-                        for fp in frame_processors:
-                            processed_frame = fp.process_frame_v2(processed_frame)
-                    else:
-                        print("Server: simple_map not received for multi-face processing. Skipping.")
-                elif LIVE_SOURCE_FACE:
-                    from modules.face_analyser import get_one_face, get_many_faces
-                    
-                    if modules.globals.many_faces:
-                        target_faces = get_many_faces(processed_frame)
-                    else:
-                        target_faces = [get_one_face(processed_frame)]
-                    
-                    if target_faces and target_faces[0] is not None:
-                        for fp in frame_processors:
-                            processed_frame = fp.process_frame(LIVE_SOURCE_FACE, processed_frame, target_faces)
-                    else:
-                        print("Server: No faces detected in live frame for single-face mode. Skipping processing.")
+                    for fp in frame_processors:
+                        # process_frame_v2 expects modules.globals.simple_map to be set
+                        processed_frame = fp.process_frame_v2(processed_frame)
                 else:
-                    print("Server: No source face set for single-face mode. Skipping processing.")
+                    print("Server: simple_map not received for multi-face processing. Skipping.")
+                    # Optionally, send a message back to the client or display a warning
+            elif LIVE_SOURCE_FACE: # Single face mode (non-mapped)
+                # For single face mode, we need to detect faces in the incoming frame
+                from modules.face_analyser import get_one_face, get_many_faces
+                
+                if modules.globals.many_faces:
+                    target_faces = get_many_faces(processed_frame)
+                else:
+                    target_faces = [get_one_face(processed_frame)] # Wrap in list for consistent iteration
+                
+                if target_faces and target_faces[0] is not None: # Check if any face was detected
+                    print(f"Server: Detected {len(target_faces)} face(s) in live frame for single-face mode.")
+                    for fp in frame_processors:
+                        # Pass the source face, the target frame, and the already detected target_faces
+                        processed_frame = fp.process_frame(LIVE_SOURCE_FACE, processed_frame, target_faces)
+                else:
+                    print("Server: No faces detected in live frame for single-face mode. Skipping processing.")
+            else:
+                print("Server: No source face set for single-face mode. Skipping processing.")
 
-                # Encode the processed frame
-                _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                return base64.b64encode(buffer).decode('utf-8')
-
-            # Offload the CPU-bound work to a separate thread
-            processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, data)
+            # Encode the processed frame and send it back
+            _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70]) # Reduced quality for faster transfer
+            processed_frame_b64 = base64.b64encode(buffer).decode('utf-8')
             await websocket.send_text(processed_frame_b64)
 
     except WebSocketDisconnect:
