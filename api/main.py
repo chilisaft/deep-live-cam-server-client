@@ -236,6 +236,9 @@ async def websocket_live_preview(websocket: WebSocket):
         for task in done:
             if task.exception() is not None:
                 raise task.exception()
+    except WebSocketDisconnect:
+        # This is a normal closure event when the client disconnects.
+        print("Client disconnected gracefully.")
     except Exception as e:
         print(f"WebSocket Error: {e}")
     finally:
