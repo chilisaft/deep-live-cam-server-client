@@ -17,8 +17,7 @@ from modules.utilities import (
 from modules.cluster_analysis import find_closest_centroid
 import os
 
-FACE_SWAPPER = None
-THREAD_LOCK = threading.Lock()
+_thread_local_face_swapper = threading.local()
 NAME = "DLC.FACE-SWAPPER"
 
 abs_dir = os.path.dirname(os.path.abspath(__file__))
@@ -57,16 +56,13 @@ def pre_start() -> bool:
 
 
 def get_face_swapper() -> Any:
-    global FACE_SWAPPER
-
-    with THREAD_LOCK:
-        if FACE_SWAPPER is None:
-            model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
-            FACE_SWAPPER = insightface.model_zoo.get_model(
-                model_path, providers=modules.globals.execution_providers
-                # Ensure providers are correctly passed and supported by your ONNX Runtime installation
-            )
-    return FACE_SWAPPER
+    if not hasattr(_thread_local_face_swapper, 'model'):
+        # This is thread-safe. Each thread will initialize its own model instance once.
+        model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
+        _thread_local_face_swapper.model = insightface.model_zoo.get_model(
+            model_path, providers=modules.globals.execution_providers
+        )
+    return _thread_local_face_swapper.model
 
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
@@ -87,33 +83,34 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
             logging.error("face_swapper.get() returned None. Swap failed.")
             return temp_frame # Return original frame if swap fails
         # Optional: Check if the swapped_frame is mostly black (e.g., all zeros)
-        if np.all(swapped_frame == 0):
+        if swapped_frame.size > 0 and np.all(swapped_frame == 0): # Added size check to prevent error on empty array
             logging.warning("face_swapper.get() returned an all-black frame. Check model output or input data.")
     except Exception as e:
         logging.error(f"Error during face swap: {e}. Returning original frame.")
         return temp_frame # Return original frame on error
 
-    if modules.globals.mouth_mask:
-        # Create a mask for the target face
-        face_mask = create_face_mask(target_face, temp_frame)
-
-        # Create the mouth mask
-        mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon = (
-            create_lower_mouth_mask(target_face, temp_frame)
-        )
-
-        # Apply the mouth area
-        swapped_frame = apply_mouth_area(
-            swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon
-        )
-
-        if modules.globals.show_mouth_mask_box:
-            mouth_mask_data = (mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon)
-            swapped_frame = draw_mouth_mask_visualization(
-                swapped_frame, target_face, mouth_mask_data
-            )
-
-    return swapped_frame
+    # Temporarily disable mouth_mask for debugging.
+    # If the deepfake looks correct after this, the issue is in the mouth_mask logic.
+    # if modules.globals.mouth_mask:
+    #     # Create a mask for the target face
+    #     face_mask = create_face_mask(target_face, temp_frame)
+    #
+    #     # Create the mouth mask
+    #     mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon = (
+    #         create_lower_mouth_mask(target_face, temp_frame)
+    #     )
+    #
+    #     # Apply the mouth area
+    #     swapped_frame = apply_mouth_area(
+    #         swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon
+    #     )
+    #
+    #     if modules.globals.show_mouth_mask_box:
+    #         mouth_mask_data = (mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon)
+    #         swapped_frame = draw_mouth_mask_visualization(
+    #             swapped_frame, target_face, mouth_mask_data
+    #         )
+    return swapped_frame # Return swapped_frame directly without mouth_mask processing
 
 
 def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None) -> Frame:

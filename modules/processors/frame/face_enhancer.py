@@ -6,26 +6,24 @@ import torch
 from modules.typing import Frame
 from modules.utilities import resolve_relative_path, conditional_download
 
-FACE_ENHANCER = None
-THREAD_LOCK = threading.Lock()
+_thread_local_face_enhancer = threading.local()
 NAME = 'DLC.FACE-ENHANCER'
 
 
 def get_face_enhancer() -> Any:
-	global FACE_ENHANCER
-
-	with THREAD_LOCK:
-		if FACE_ENHANCER is None:
-			import modules.globals # Import here to avoid circular dependency at top level
-			from gfpgan.utils import GFPGANer # Import here to avoid circular dependency at top level
-			model_path = resolve_relative_path('../../models/GFPGANv1.4.pth')
-			FACE_ENHANCER = GFPGANer(
-				model_path=model_path,
-				upscale=1,
-				arch='clean',
-				channel_multiplier=2,
-				bg_upsampler=None)
-	return FACE_ENHANCER
+	if not hasattr(_thread_local_face_enhancer, 'model'):
+		# This is thread-safe. Each thread will initialize its own model instance once.
+		# Imports are safe here because this is only called from a worker thread
+		# after the main app has started, avoiding circular dependencies.
+		from gfpgan.utils import GFPGANer
+		model_path = resolve_relative_path('../../models/GFPGANv1.4.pth')
+		_thread_local_face_enhancer.model = GFPGANer(
+			model_path=model_path,
+			upscale=1,
+			arch='clean',
+			channel_multiplier=2,
+			bg_upsampler=None)
+	return _thread_local_face_enhancer.model
 
 
 def pre_check() -> bool:
@@ -63,7 +61,7 @@ def process_frame(source_face: Any, temp_frame: Frame, target_faces: List[Any]) 
 def process_image(source_path: str, target_path: str, output_path: str) -> None:
 	from modules.core import update_status
 	target_frame = cv2.imread(target_path)
-	# In a real scenario, you'd get target faces here
+	# In a real scenario, you'd get target faces herez
 	# result = process_frame(None, target_frame, get_many_faces(target_frame))
 	# cv2.imwrite(output_path, result)
 	update_status('Processing...', NAME)
