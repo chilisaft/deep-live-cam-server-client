@@ -6,8 +6,6 @@ import torch
 from modules.typing import Frame
 from modules.utilities import resolve_relative_path, conditional_download
 
-from gfpgan.utils import GFPGANer
-
 FACE_ENHANCER = None
 THREAD_LOCK = threading.Lock()
 NAME = 'DLC.FACE-ENHANCER'
