@@ -10,10 +10,10 @@ psutil==5.9.8
 tk==0.1.0
 customtkinter==5.2.2
 pillow==11.1.0
-torch==2.5.1+cu118; sys_platform != 'darwin'
-torch==2.5.1; sys_platform == 'darwin'
-torchvision==0.20.1+cu118; sys_platform != 'darwin' # For CUDA 11.8
-torchvision==0.20.1; sys_platform == 'darwin' # For CPU/MPS on Mac
+torch==2.1.2+cu118; sys_platform != 'darwin' # Align with onnxruntime-gpu for stable CUDA provider loading
+torch==2.1.2; sys_platform == 'darwin'
+torchvision==0.16.2+cu118; sys_platform != 'darwin' # Align with onnxruntime-gpu for stable CUDA provider loading
+torchvision==0.16.2; sys_platform == 'darwin'
 onnxruntime-silicon==1.13.1; sys_platform == 'darwin' and platform_machine == 'arm64' # Aligned with README
 onnxruntime-gpu==1.16.3; sys_platform != 'darwin' # Downgrade for stability with insightface
 tensorflow; sys_platform != 'darwin'
