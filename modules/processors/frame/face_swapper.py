@@ -7,6 +7,7 @@ import logging # Ensure logging is imported
 import modules.globals
 import logging
 import modules.processors.frame.core
+from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces, default_source_face
 from modules.typing import Face, Frame
 from modules.utilities import (
@@ -17,9 +18,10 @@ from modules.utilities import (
 from modules.cluster_analysis import find_closest_centroid
 import os
 
+FACE_SWAPPER = None
+THREAD_LOCK = threading.Lock()
 NAME = "DLC.FACE-SWAPPER"
-_thread_local_swapper = threading.local()
- 
+
 abs_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(abs_dir))), "models"
@@ -38,7 +40,6 @@ def pre_check() -> bool:
 
 
 def pre_start() -> bool:
-    from modules.core import update_status
     if not modules.globals.map_faces and not is_image(modules.globals.source_path):
         update_status("Select an image for source path.", NAME)
         return False
@@ -56,12 +57,16 @@ def pre_start() -> bool:
 
 
 def get_face_swapper() -> Any:
-    if not hasattr(_thread_local_swapper, "swapper") or _thread_local_swapper.swapper is None:
-        model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
-        _thread_local_swapper.swapper = insightface.model_zoo.get_model(
-            model_path, providers=modules.globals.execution_providers
-        )
-    return _thread_local_swapper.swapper
+    global FACE_SWAPPER
+
+    with THREAD_LOCK:
+        if FACE_SWAPPER is None:
+            model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
+            FACE_SWAPPER = insightface.model_zoo.get_model(
+                model_path, providers=modules.globals.execution_providers
+                # Ensure providers are correctly passed and supported by your ONNX Runtime installation
+            )
+    return FACE_SWAPPER
 
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
@@ -257,7 +262,6 @@ def process_frames(
 
 
 def process_image(source_path: str, target_path: str, output_path: str) -> None:
-    from modules.core import update_status
     if not modules.globals.map_faces:
         source_face = get_one_face(cv2.imread(source_path))
         target_frame = cv2.imread(target_path)
@@ -274,7 +278,6 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
 
 
 def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
-    from modules.core import update_status
     if modules.globals.map_faces and modules.globals.many_faces:
         update_status(
             "Many faces enabled. Using first source image. Progressing...", NAME

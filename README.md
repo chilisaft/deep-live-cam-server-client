@@ -187,38 +187,23 @@ pip install -r requirements.txt
 
 **CUDA Execution Provider (Nvidia)**
 
-This method is recommended for the best performance on NVIDIA GPUs.
+1. Install [CUDA Toolkit 12.8.0](https://developer.nvidia.com/cuda-12-8-0-download-archive)
+2. Install [cuDNN v8.9.7 for CUDA 12.x](https://developer.nvidia.com/rdp/cudnn-archive) (required for onnxruntime-gpu):
+   - Download cuDNN v8.9.7 for CUDA 12.x
+   - Make sure the cuDNN bin directory is in your system PATH
+3. Install dependencies:
 
-**Prerequisites:**
-- An up-to-date NVIDIA driver. On Linux, you can check with `nvidia-smi`. On Windows, use the GeForce Experience or NVIDIA's website.
+```bash
+pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip uninstall onnxruntime onnxruntime-gpu
+pip install onnxruntime-gpu==1.21.0
+```
 
-**Installation Steps:**
+3. Usage:
 
-1.  **Create and activate a virtual environment.** This is highly recommended to avoid conflicts.
-
-2.  **Install PyTorch with CUDA 12.1 support.** This command will install PyTorch and the necessary CUDA/cuDNN libraries for it *within your Python environment*, which is the most reliable method and avoids system-wide installation issues.
-
-    ```bash
-    pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    ```
-
-3.  **Install ONNX Runtime for GPU.** This must be done after installing PyTorch to ensure it uses the correct CUDA libraries.
-
-    ```bash
-    # Uninstall any existing versions first to be safe
-    pip uninstall onnxruntime onnxruntime-gpu -y
-    # Install the GPU version
-    pip install onnxruntime-gpu
-    ```
-
-4.  **Usage:**
-
-    ```bash
-    python run.py --execution-provider cuda
-    ```
-
-**Troubleshooting for Ubuntu 24.04 and other newer systems:**
-The method above is the most robust for new Linux distributions. Manually installing the CUDA Toolkit and cuDNN from NVIDIA's website can be complex if they don't officially provide packages for your OS version yet. Letting `pip` manage these dependencies for your Python environment is the recommended path.
+```bash
+python run.py --execution-provider cuda
+```
 
 **CoreML Execution Provider (Apple Silicon)**
 

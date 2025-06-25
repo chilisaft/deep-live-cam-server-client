@@ -9,8 +9,6 @@ import uuid # Add this import
 import json
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, BackgroundTasks, Form
 from fastapi.responses import JSONResponse
-import threading
-from typing import Any # Add this import
 
 # Add project root to path to allow importing modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,8 +26,8 @@ except ImportError as e:
     print(f"Warning: Could not pre-load face_enhancer module: {e}")
 
 # --- Globals for Server State ---
-LIVE_SOURCE_IMAGE = None # Store the raw image, not the Face object, to ensure thread safety
-_thread_local_data = threading.local() # Use thread-local storage for the source face object
+LIVE_SOURCE_FACE = None
+# LIVE_SIMPLE_MAP = None # Not needed, we'll use modules.globals.simple_map directly
 TEMP_SERVER_DIR = "temp_server_files"
 os.makedirs(TEMP_SERVER_DIR, exist_ok=True)
 
@@ -116,22 +114,18 @@ async def set_live_source_endpoint(file: UploadFile = File(...)):
     Receives a source image for the live session, analyzes it for a single face,
     and stores it in the server's memory.
     """
-    global LIVE_SOURCE_IMAGE
+    global LIVE_SOURCE_FACE
     try:
         contents = await file.read()
         np_arr = np.frombuffer(contents, np.uint8)
         cv2_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         
-        # Check if a face exists, but store the raw image to avoid cross-thread issues with CUDA
-        if get_one_face(cv2_img):
-            LIVE_SOURCE_IMAGE = cv2_img
-            # Clear any old thread-local source faces when a new image is set
-            if hasattr(_thread_local_data, 'source_face'):
-                del _thread_local_data.source_face
-            print("Server: Live source image set successfully.")
-            return JSONResponse(status_code=200, content={"message": "Source image set successfully."})
+        LIVE_SOURCE_FACE = get_one_face(cv2_img)
+
+        if LIVE_SOURCE_FACE:
+            print("Server: Live source face set successfully.")
+            return JSONResponse(status_code=200, content={"message": "Source face set successfully."})
         else:
-            LIVE_SOURCE_IMAGE = None
             print("Server: No face found in the provided live source image.")
             return JSONResponse(status_code=400, content={"message": "No face found in source image."})
     except Exception as e:
@@ -171,8 +165,8 @@ def process_batch_job_sync(job_id: str, source_path: str, target_path: str, outp
         if is_image(target_path):
             shutil.copy2(target_path, output_path)
 
-            active_processors = ['face_swapper']
-            if options.get('fp_ui', {}).get('face_enhancer', True):
+            active_processors = modules.globals.frame_processors.copy()
+            if modules.globals.fp_ui.get('face_enhancer'):
                 active_processors.append('face_enhancer')
 
             for frame_processor in get_frame_processors_modules(active_processors):
@@ -182,9 +176,10 @@ def process_batch_job_sync(job_id: str, source_path: str, target_path: str, outp
             extract_frames(target_path)
             temp_frame_paths = get_temp_frame_paths(target_path)
             
-            active_processors = ['face_swapper']
-            if options.get('fp_ui', {}).get('face_enhancer', True):
+            active_processors = modules.globals.frame_processors.copy()
+            if modules.globals.fp_ui.get('face_enhancer'):
                 active_processors.append('face_enhancer')
+
             for frame_processor in get_frame_processors_modules(active_processors):
                 frame_processor.process_video(source_path, temp_frame_paths)
             
@@ -269,48 +264,11 @@ class LatestFrame:
             self.frame_data = None  # Consume the frame
             return frame_data
 
-def get_thread_local_face_analyser() -> Any:
-    """
-    Initializes and returns a thread-local face analyser.
-    This is crucial for CUDA thread safety.
-    """
-    if not hasattr(_thread_local_data, 'face_analyser'):
-        import insightface
-        analyser = insightface.app.FaceAnalysis(name='buffalo_l', providers=modules.globals.execution_providers)
-        analyser.prepare(ctx_id=0)
-        _thread_local_data.face_analyser = analyser
-    return _thread_local_data.face_analyser
-
-def get_thread_local_source_face() -> Any:
-    """
-    Analyzes the global LIVE_SOURCE_IMAGE to get a thread-local Face object.
-    This is crucial for CUDA thread safety, as it ensures the Face object
-    is created and used in the same thread as the model.
-    """
-    if LIVE_SOURCE_IMAGE is None:
-        return None
-    
-    # Check if the source face is already analyzed and cached for this thread
-    if not hasattr(_thread_local_data, 'source_face'):
-        face_analyser = get_thread_local_face_analyser()
-        faces = face_analyser.get(LIVE_SOURCE_IMAGE)
-        if faces:
-            _thread_local_data.source_face = sorted(faces, key=lambda x: x.bbox[0])[0]
-        else:
-            _thread_local_data.source_face = None
-    
-    return _thread_local_data.source_face
-
 def process_and_encode_sync(payload_data: str) -> str:
     """
     Synchronous function to handle all CPU-bound processing.
-    This function is run in a separate thread and ensures all models are
-    loaded and used in a thread-safe manner.
+    This is run in a separate thread to avoid blocking the asyncio event loop.
     """
-    # Import processor modules here to avoid circular dependencies at startup
-    import modules.processors.frame.face_swapper as face_swapper
-    import modules.processors.frame.face_enhancer as face_enhancer
-
     payload = json.loads(payload_data)
 
     # Update server's global state with client's options
@@ -331,15 +289,15 @@ def process_and_encode_sync(payload_data: str) -> str:
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     processed_frame = frame
 
-    # Get thread-local analyser and source face.
-    face_analyser = get_thread_local_face_analyser()
-    source_face = get_thread_local_source_face()
+    # Dynamically build the list of processors for this frame
+    # Start with the base processors from the command line (e.g., face_swapper)
+    active_processors = modules.globals.frame_processors.copy()
+    
+    # Add other processors based on UI toggles sent from the client
+    if modules.globals.fp_ui.get('face_enhancer') and 'face_enhancer' not in active_processors:
+        active_processors.append('face_enhancer')
 
-    # Determine which processors to use based on client options
-    frame_processors = [face_swapper]
-    if modules.globals.fp_ui.get('face_enhancer', True):
-        frame_processors.append(face_enhancer)
-
+    frame_processors = get_frame_processors_modules(active_processors)
 
     if modules.globals.map_faces:
         if modules.globals.simple_map:
@@ -347,17 +305,17 @@ def process_and_encode_sync(payload_data: str) -> str:
                 processed_frame = fp.process_frame_v2(processed_frame)
         else:
             print("Server: simple_map not received for multi-face processing. Skipping.")
-    elif source_face: # Use the thread-local source_face
-        # Get target faces using the thread-local analyser
+    elif LIVE_SOURCE_FACE:
+        from modules.face_analyser import get_one_face, get_many_faces
+        
         if modules.globals.many_faces:
-            target_faces = face_analyser.get(processed_frame)
+            target_faces = get_many_faces(processed_frame)
         else:
-            faces = face_analyser.get(processed_frame)
-            target_faces = [sorted(faces, key=lambda x: x.bbox[0])[0]] if faces else [None]
+            target_faces = [get_one_face(processed_frame)]
         
         if target_faces and target_faces[0] is not None:
             for fp in frame_processors:
-                processed_frame = fp.process_frame(source_face, processed_frame, target_faces)
+                processed_frame = fp.process_frame(LIVE_SOURCE_FACE, processed_frame, target_faces)
     
     # Encode the processed frame
     _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -383,6 +341,8 @@ async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFram
 async def websocket_live_preview(websocket: WebSocket):
     await websocket.accept()
     latest_frame = LatestFrame()
+    from modules.face_analyser import get_face_analyser
+    get_face_analyser() # Ensure analyser is initialized in the main thread before starting tasks
 
     receiver_task = asyncio.create_task(receive_frames(websocket, latest_frame))
     processor_task = asyncio.create_task(process_and_send_frames(websocket, latest_frame))
