@@ -89,28 +89,26 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
         logging.error(f"Error during face swap: {e}. Returning original frame.")
         return temp_frame # Return original frame on error
 
-    # Temporarily disable mouth_mask for debugging.
-    # If the deepfake looks correct after this, the issue is in the mouth_mask logic.
-    # if modules.globals.mouth_mask:
-    #     # Create a mask for the target face
-    #     face_mask = create_face_mask(target_face, temp_frame)
-    #
-    #     # Create the mouth mask
-    #     mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon = (
-    #         create_lower_mouth_mask(target_face, temp_frame)
-    #     )
-    #
-    #     # Apply the mouth area
-    #     swapped_frame = apply_mouth_area(
-    #         swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon
-    #     )
-    #
-    #     if modules.globals.show_mouth_mask_box:
-    #         mouth_mask_data = (mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon)
-    #         swapped_frame = draw_mouth_mask_visualization(
-    #             swapped_frame, target_face, mouth_mask_data
-    #         )
-    return swapped_frame # Return swapped_frame directly without mouth_mask processing
+    if modules.globals.mouth_mask:
+        # Create a mask for the target face
+        face_mask = create_face_mask(target_face, temp_frame)
+
+        # Create the mouth mask
+        mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon = (
+            create_lower_mouth_mask(target_face, temp_frame)
+        )
+
+        # Apply the mouth area
+        swapped_frame = apply_mouth_area(
+            swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon
+        )
+
+        if modules.globals.show_mouth_mask_box:
+            mouth_mask_data = (mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon)
+            swapped_frame = draw_mouth_mask_visualization(
+                swapped_frame, target_face, mouth_mask_data
+            )
+    return swapped_frame
 
 
 def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None) -> Frame:
