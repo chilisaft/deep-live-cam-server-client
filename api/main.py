@@ -125,118 +125,81 @@ async def set_live_source_endpoint(file: UploadFile = File(...)):
         print(f"Server Error on /set-live-source: {e}")
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
 
-
-class LatestFrame:
-    """
-    A thread-safe class to hold the latest frame data from the client.
-    This ensures the processor always works on the most recent frame,
-    discarding stale ones, which is crucial for a low-latency live preview.
-    """
-    def __init__(self):
-        self.frame_data = None
-        self.lock = asyncio.Lock()
-
-    async def set(self, frame_data: str):
-        async with self.lock:
-            self.frame_data = frame_data
-
-    async def get(self) -> str | None:
-        async with self.lock:
-            frame_data = self.frame_data
-            self.frame_data = None  # Consume the frame
-            return frame_data
-
-def process_and_encode_sync(payload_data: str) -> str:
-    """
-    Synchronous function to handle all CPU-bound processing.
-    This is run in a separate thread to avoid blocking the asyncio event loop.
-    """
-    payload = json.loads(payload_data)
-
-    # Update server's global state with client's options
-    options = payload.get('options', {})
-    for key, value in options.items():
-        if hasattr(modules.globals, key):
-            setattr(modules.globals, key, value)
-    if 'fp_ui' in options:
-        modules.globals.fp_ui = options['fp_ui']
-
-    if 'simple_map' in payload:
-        modules.globals.simple_map = payload['simple_map']
-
-    # Decode the frame
-    frame_b64 = payload['frame']
-    img_data = base64.b64decode(frame_b64)
-    np_arr = np.frombuffer(img_data, np.uint8)
-    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    processed_frame = frame
-
-    frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
-
-    if modules.globals.map_faces:
-        if modules.globals.simple_map:
-            for fp in frame_processors:
-                processed_frame = fp.process_frame_v2(processed_frame)
-        else:
-            print("Server: simple_map not received for multi-face processing. Skipping.")
-    elif LIVE_SOURCE_FACE:
-        from modules.face_analyser import get_one_face, get_many_faces
-        
-        if modules.globals.many_faces:
-            target_faces = get_many_faces(processed_frame)
-        else:
-            target_faces = [get_one_face(processed_frame)]
-        
-        if target_faces and target_faces[0] is not None:
-            for fp in frame_processors:
-                processed_frame = fp.process_frame(LIVE_SOURCE_FACE, processed_frame, target_faces)
-        else:
-            print("Server: No faces detected in live frame for single-face mode. Skipping processing.")
-    else:
-        print("Server: No source face set for single-face mode. Skipping processing.")
-
-    # Encode the processed frame
-    _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-    return base64.b64encode(buffer).decode('utf-8')
-
-async def receive_frames(websocket: WebSocket, latest_frame: LatestFrame):
-    """Task to continuously receive frames and update the latest one."""
-    while True:
-        data = await websocket.receive_text()
-        await latest_frame.set(data)
-
-async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFrame):
-    """Task to process the latest available frame and send it back."""
-    while True:
-        payload_data = await latest_frame.get()
-        if payload_data:
-            processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload_data)
-            await websocket.send_text(processed_frame_b64)
-        else:
-            await asyncio.sleep(0.01) # Avoid busy-waiting
-
 @app.websocket("/ws/live-preview")
 async def websocket_live_preview(websocket: WebSocket):
+    """
+    Handles the live preview WebSocket connection. Receives frames and options from the client,
+    processes them, and sends the result back.
+    """
     await websocket.accept()
-    latest_frame = LatestFrame()
-    from modules.face_analyser import get_face_analyser
-    get_face_analyser() # Ensure analyser is initialized in the main thread before starting tasks
-
-    receiver_task = asyncio.create_task(receive_frames(websocket, latest_frame))
-    processor_task = asyncio.create_task(process_and_send_frames(websocket, latest_frame))
-
     try:
-        done, pending = await asyncio.wait(
-            [receiver_task, processor_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-        # Re-raise exceptions from completed tasks if any
-        for task in done:
-            if task.exception() is not None:
-                raise task.exception()
+        from modules.face_analyser import get_face_analyser
+        get_face_analyser() # Ensure analyser is initialized in the main thread
+
+        while True:
+            data = await websocket.receive_text()
+
+            def process_and_encode_sync(payload_data: str) -> str:
+                """
+                Synchronous function to handle all CPU-bound processing.
+                This will be run in a separate thread to avoid blocking the asyncio event loop.
+                """
+                payload = json.loads(payload_data)
+
+                # Update server's global state with client's options
+                options = payload.get('options', {})
+                for key, value in options.items():
+                    if hasattr(modules.globals, key):
+                        setattr(modules.globals, key, value)
+                if 'fp_ui' in options:
+                    modules.globals.fp_ui = options['fp_ui']
+
+                if 'simple_map' in payload:
+                    modules.globals.simple_map = payload['simple_map']
+
+                # Decode the frame
+                frame_b64 = payload['frame']
+                img_data = base64.b64decode(frame_b64)
+                np_arr = np.frombuffer(img_data, np.uint8)
+                frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                processed_frame = frame
+
+                frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
+
+                if modules.globals.map_faces:
+                    if modules.globals.simple_map:
+                        for fp in frame_processors:
+                            processed_frame = fp.process_frame_v2(processed_frame)
+                    else:
+                        print("Server: simple_map not received for multi-face processing. Skipping.")
+                elif LIVE_SOURCE_FACE:
+                    from modules.face_analyser import get_one_face, get_many_faces
+                    
+                    if modules.globals.many_faces:
+                        target_faces = get_many_faces(processed_frame)
+                    else:
+                        target_faces = [get_one_face(processed_frame)]
+                    
+                    if target_faces and target_faces[0] is not None:
+                        for fp in frame_processors:
+                            processed_frame = fp.process_frame(LIVE_SOURCE_FACE, processed_frame, target_faces)
+                    else:
+                        print("Server: No faces detected in live frame for single-face mode. Skipping processing.")
+                else:
+                    print("Server: No source face set for single-face mode. Skipping processing.")
+
+                # Encode the processed frame
+                _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                return base64.b64encode(buffer).decode('utf-8')
+
+            # Offload the CPU-bound work to a separate thread
+            processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, data)
+            await websocket.send_text(processed_frame_b64)
+
+    except WebSocketDisconnect:
+        print("Client disconnected from live preview.")
     except Exception as e:
-        print(f"WebSocket Error: {e}")
-    finally:
-        print("WebSocket session ended.")
+        print(f"Error in WebSocket: {e}")
+    # The 'finally' block is removed because FastAPI/Starlette handles WebSocket closure
+    # automatically when the handler function exits or an exception occurs.
+    # Explicitly calling websocket.close() here can lead to the RuntimeError.
