@@ -15,7 +15,7 @@ torch==2.5.1; sys_platform == 'darwin'
 torchvision==0.20.1+cu118; sys_platform != 'darwin' # For CUDA 11.8
 torchvision==0.20.1; sys_platform == 'darwin' # For CPU/MPS on Mac
 onnxruntime-silicon==1.13.1; sys_platform == 'darwin' and platform_machine == 'arm64' # Aligned with README
-onnxruntime-gpu==1.21.0; sys_platform != 'darwin' # Aligned with README
+onnxruntime-gpu==1.16.3; sys_platform != 'darwin' # Downgrade for stability with insightface
 tensorflow; sys_platform != 'darwin'
 opennsfw2==0.10.2
 protobuf==4.23.2
