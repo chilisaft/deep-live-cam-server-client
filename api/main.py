@@ -165,8 +165,8 @@ def process_batch_job_sync(job_id: str, source_path: str, target_path: str, outp
         if is_image(target_path):
             shutil.copy2(target_path, output_path)
 
-            active_processors = modules.globals.frame_processors.copy()
-            if modules.globals.fp_ui.get('face_enhancer'):
+            active_processors = ['face_swapper']
+            if options.get('fp_ui', {}).get('face_enhancer', True):
                 active_processors.append('face_enhancer')
 
             for frame_processor in get_frame_processors_modules(active_processors):
@@ -176,10 +176,9 @@ def process_batch_job_sync(job_id: str, source_path: str, target_path: str, outp
             extract_frames(target_path)
             temp_frame_paths = get_temp_frame_paths(target_path)
             
-            active_processors = modules.globals.frame_processors.copy()
-            if modules.globals.fp_ui.get('face_enhancer'):
+            active_processors = ['face_swapper']
+            if options.get('fp_ui', {}).get('face_enhancer', True):
                 active_processors.append('face_enhancer')
-
             for frame_processor in get_frame_processors_modules(active_processors):
                 frame_processor.process_video(source_path, temp_frame_paths)
             
@@ -289,12 +288,11 @@ def process_and_encode_sync(payload_data: str) -> str:
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     processed_frame = frame
 
-    # Dynamically build the list of processors for this frame
-    # Start with the base processors from the command line (e.g., face_swapper)
-    active_processors = modules.globals.frame_processors.copy()
-    
-    # Add other processors based on UI toggles sent from the client
-    if modules.globals.fp_ui.get('face_enhancer') and 'face_enhancer' not in active_processors:
+    # The face_swapper is always the first step in the pipeline.
+    active_processors = ['face_swapper']
+    # The face_enhancer is crucial for quality and should be on by default.
+    # It is only disabled if the client explicitly sends `face_enhancer: false`.
+    if modules.globals.fp_ui.get('face_enhancer', True):
         active_processors.append('face_enhancer')
 
     frame_processors = get_frame_processors_modules(active_processors)
