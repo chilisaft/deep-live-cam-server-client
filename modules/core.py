@@ -286,7 +286,11 @@ def run() -> None:
     parse_args()
     if not pre_check():
         return
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+    
+    # Ensure all possible frame processors are pre-checked/initialized by the system.
+    # This prevents "not found" errors if they are dynamically enabled later via UI.
+    all_possible_frame_processors = list(set(modules.globals.frame_processors + ['face_enhancer']))
+    for frame_processor in get_frame_processors_modules(all_possible_frame_processors):
         if not frame_processor.pre_check():
             return
     limit_resources()
