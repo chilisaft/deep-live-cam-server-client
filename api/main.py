@@ -273,7 +273,15 @@ def process_and_encode_sync(payload_data: str) -> str:
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     processed_frame = frame
 
-    frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
+    # Dynamically build the list of processors for this frame
+    # Start with the base processors from the command line (e.g., face_swapper)
+    active_processors = modules.globals.frame_processors.copy()
+    
+    # Add other processors based on UI toggles sent from the client
+    if modules.globals.fp_ui.get('face_enhancer') and 'face_enhancer' not in active_processors:
+        active_processors.append('face_enhancer')
+
+    frame_processors = get_frame_processors_modules(active_processors)
 
     if modules.globals.map_faces:
         if modules.globals.simple_map:
