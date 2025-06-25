@@ -975,15 +975,13 @@ def create_networked_webcam_preview(camera_index: int) -> None:
 
         # Main loop for sending frames and updating the UI
         prev_frame_time = 0
-        frame_in_flight = False
         while not stop_event.is_set():
             # Always capture the latest frame from the camera to reduce latency
             ret, current_frame = cap.read()
             if not ret:
                 break
 
-            # --- Sending Part (conditional on not having a frame in flight) ---
-            if not frame_in_flight:
+            # --- Sending Part (unconditional) ---
                 frame_to_send = current_frame
                 if modules.globals.live_mirror:
                     frame_to_send = cv2.flip(frame_to_send, 1)
@@ -1006,7 +1004,6 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 
                 try:
                     ws.send(json.dumps(payload_data))
-                    frame_in_flight = True
                 except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
                     stop_event.set() # Stop the loop if connection is lost
                     continue
@@ -1024,7 +1021,6 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 image = Image.fromarray(image)
                 image = ctk.CTkImage(image, size=(processed_frame.shape[1], processed_frame.shape[0]))
                 preview_label.configure(image=image)
-                frame_in_flight = False # Ready for a new frame
             except queue.Empty:
                 pass  # No new frame from the server yet
 
