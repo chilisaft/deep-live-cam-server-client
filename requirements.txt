@@ -7,13 +7,12 @@ cv2_enumerate_cameras==1.1.15
 onnx==1.16.0
 insightface==0.7.3
 psutil==5.9.8
-tk==0.1.0
 customtkinter==5.2.2
 pillow==11.1.0
-torch==2.5.1+cu118; sys_platform != 'darwin'
-torch==2.5.1; sys_platform == 'darwin'
-torchvision==0.20.1+cu118; sys_platform != 'darwin' # For CUDA 11.8
-torchvision==0.20.1; sys_platform == 'darwin' # For CPU/MPS on Mac
+torch==2.2.2+cu118; sys_platform != 'darwin' # Downgrade for stability with other libraries
+torch==2.2.2; sys_platform == 'darwin' # Downgrade for stability with other libraries
+torchvision==0.17.2+cu118; sys_platform != 'darwin' # Downgrade for stability with other libraries
+torchvision==0.17.2; sys_platform == 'darwin' # Downgrade for stability with other libraries
 onnxruntime-silicon==1.13.1; sys_platform == 'darwin' and platform_machine == 'arm64' # Aligned with README
 onnxruntime-gpu==1.21.0; sys_platform != 'darwin' # Aligned with README
 tensorflow; sys_platform != 'darwin'
