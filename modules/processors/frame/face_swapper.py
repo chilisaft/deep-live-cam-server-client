@@ -66,6 +66,21 @@ def get_face_swapper() -> Any:
 
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
+    # --- DIAGNOSTIC STEP ---
+    # To isolate the problem, we will temporarily bypass the face swapper
+    # and just draw a rectangle around the target face.
+    # If you see a green box on the face in the live preview, it means
+    # face detection and the data pipeline are working correctly, and the
+    # issue is almost certainly inside the face_swapper.get() call itself.
+    try:
+        bbox = target_face.bbox.astype(int)
+        cv2.rectangle(temp_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+        return temp_frame
+    except Exception as e:
+        logging.error(f"Error during diagnostic drawing: {e}")
+        return temp_frame
+    # --- END DIAGNOSTIC STEP ---
+
     face_swapper = get_face_swapper()
 
     # Defensive check: Ensure temp_frame is in the correct format (BGR, uint8)
