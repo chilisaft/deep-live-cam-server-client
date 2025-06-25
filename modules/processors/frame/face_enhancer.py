@@ -17,11 +17,10 @@ from modules.utilities import (
     is_video,
 )
 
-FACE_ENHANCER = None
 THREAD_SEMAPHORE = threading.Semaphore()
-THREAD_LOCK = threading.Lock()
 NAME = "DLC.FACE-ENHANCER"
-
+_thread_local_enhancer = threading.local()
+ 
 abs_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(abs_dir))), "models"
@@ -60,33 +59,30 @@ except Exception as e:
     pass
 
 def get_face_enhancer() -> Any:
-    global FACE_ENHANCER
+    if not hasattr(_thread_local_enhancer, "enhancer") or _thread_local_enhancer.enhancer is None:
+        model_path = os.path.join(models_dir, "GFPGANv1.4.pth")
+        
+        selected_device = None
+        device_priority = []
 
-    with THREAD_LOCK:
-        if FACE_ENHANCER is None:
-            model_path = os.path.join(models_dir, "GFPGANv1.4.pth")
-            
-            selected_device = None
-            device_priority = []
+        if TENSORRT_AVAILABLE and torch.cuda.is_available():
+            selected_device = torch.device("cuda")
+            device_priority.append("TensorRT+CUDA")
+        elif torch.cuda.is_available():
+            selected_device = torch.device("cuda")
+            device_priority.append("CUDA")
+        elif torch.backends.mps.is_available() and platform.system() == "Darwin":
+            selected_device = torch.device("mps")
+            device_priority.append("MPS")
+        elif not torch.cuda.is_available():
+            selected_device = torch.device("cpu")
+            device_priority.append("CPU")
+        
+        _thread_local_enhancer.enhancer = gfpgan.GFPGANer(model_path=model_path, upscale=1, device=selected_device)
 
-            if TENSORRT_AVAILABLE and torch.cuda.is_available():
-                selected_device = torch.device("cuda")
-                device_priority.append("TensorRT+CUDA")
-            elif torch.cuda.is_available():
-                selected_device = torch.device("cuda")
-                device_priority.append("CUDA")
-            elif torch.backends.mps.is_available() and platform.system() == "Darwin":
-                selected_device = torch.device("mps")
-                device_priority.append("MPS")
-            elif not torch.cuda.is_available():
-                selected_device = torch.device("cpu")
-                device_priority.append("CPU")
-            
-            FACE_ENHANCER = gfpgan.GFPGANer(model_path=model_path, upscale=1, device=selected_device)
-
-            # for debug:
-            print(f"Selected device: {selected_device} and device priority: {device_priority}")
-    return FACE_ENHANCER
+        # for debug:
+        print(f"Selected device: {selected_device} and device priority: {device_priority}")
+    return _thread_local_enhancer.enhancer
 
 
 def enhance_face(temp_frame: Frame) -> Frame:

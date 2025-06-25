@@ -18,10 +18,9 @@ from modules.utilities import (
 from modules.cluster_analysis import find_closest_centroid
 import os
 
-FACE_SWAPPER = None
-THREAD_LOCK = threading.Lock()
 NAME = "DLC.FACE-SWAPPER"
-
+_thread_local_swapper = threading.local()
+ 
 abs_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(abs_dir))), "models"
@@ -57,16 +56,12 @@ def pre_start() -> bool:
 
 
 def get_face_swapper() -> Any:
-    global FACE_SWAPPER
-
-    with THREAD_LOCK:
-        if FACE_SWAPPER is None:
-            model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
-            FACE_SWAPPER = insightface.model_zoo.get_model(
-                model_path, providers=modules.globals.execution_providers
-                # Ensure providers are correctly passed and supported by your ONNX Runtime installation
-            )
-    return FACE_SWAPPER
+    if not hasattr(_thread_local_swapper, "swapper") or _thread_local_swapper.swapper is None:
+        model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
+        _thread_local_swapper.swapper = insightface.model_zoo.get_model(
+            model_path, providers=modules.globals.execution_providers
+        )
+    return _thread_local_swapper.swapper
 
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
