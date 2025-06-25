@@ -3,7 +3,6 @@ import cv2
 import threading
 import torch
 
-import modules.globals
 from modules.typing import Frame
 from modules.utilities import resolve_relative_path, conditional_download
 
@@ -19,6 +18,8 @@ def get_face_enhancer() -> Any:
 
 	with THREAD_LOCK:
 		if FACE_ENHANCER is None:
+			import modules.globals # Import here to avoid circular dependency at top level
+			from gfpgan.utils import GFPGANer # Import here to avoid circular dependency at top level
 			model_path = resolve_relative_path('../../models/GFPGANv1.4.pth')
 			FACE_ENHANCER = GFPGANer(
 				model_path=model_path,
