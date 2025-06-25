@@ -269,6 +269,18 @@ class LatestFrame:
             self.frame_data = None  # Consume the frame
             return frame_data
 
+def get_thread_local_face_analyser() -> Any:
+    """
+    Initializes and returns a thread-local face analyser.
+    This is crucial for CUDA thread safety.
+    """
+    if not hasattr(_thread_local_data, 'face_analyser'):
+        import insightface
+        analyser = insightface.app.FaceAnalysis(name='buffalo_l', providers=modules.globals.execution_providers)
+        analyser.prepare(ctx_id=0)
+        _thread_local_data.face_analyser = analyser
+    return _thread_local_data.face_analyser
+
 def get_thread_local_source_face() -> Any:
     """
     Analyzes the global LIVE_SOURCE_IMAGE to get a thread-local Face object.
@@ -280,34 +292,12 @@ def get_thread_local_source_face() -> Any:
     
     # Check if the source face is already analyzed and cached for this thread
     if not hasattr(_thread_local_data, 'source_face'):
-        # Ensure analyser is initialized for this thread
-        if not hasattr(_thread_local_data, 'face_analyser'):
-            import insightface
-            from modules.processors.frame.face_swapper import FaceSwapper
-            from modules.processors.frame.face_enhancer import FaceEnhancer
-
-            # Analyser
-            analyser = insightface.app.FaceAnalysis(name='buffalo_l', providers=modules.globals.execution_providers)
-            analyser.prepare(ctx_id=0)
-            _thread_local_data.face_analyser = analyser
-
-            # Processors
-            _thread_local_data.processors = {
-                'face_swapper': FaceSwapper(),
-                'face_enhancer': FaceEnhancer()
-            }
-
-        face_analyser = _thread_local_data.face_analyser
+        face_analyser = get_thread_local_face_analyser()
         faces = face_analyser.get(LIVE_SOURCE_IMAGE)
         if faces:
             _thread_local_data.source_face = sorted(faces, key=lambda x: x.bbox[0])[0]
         else:
             _thread_local_data.source_face = None
-
-        # Analyze the image to create a Face object specific to this thread
-        # The original call below is not thread-safe with CUDA
-        # from modules.face_analyser import get_one_face
-        # _thread_local_data.source_face = get_one_face(LIVE_SOURCE_IMAGE)
     
     return _thread_local_data.source_face
 
@@ -317,6 +307,10 @@ def process_and_encode_sync(payload_data: str) -> str:
     This function is run in a separate thread and ensures all models are
     loaded and used in a thread-safe manner.
     """
+    # Import processor modules here to avoid circular dependencies at startup
+    import modules.processors.frame.face_swapper as face_swapper
+    import modules.processors.frame.face_enhancer as face_enhancer
+
     payload = json.loads(payload_data)
 
     # Update server's global state with client's options
@@ -337,17 +331,14 @@ def process_and_encode_sync(payload_data: str) -> str:
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     processed_frame = frame
 
-    # Get thread-local models and source face.
-    # get_thread_local_source_face will trigger initialization if needed.
+    # Get thread-local analyser and source face.
+    face_analyser = get_thread_local_face_analyser()
     source_face = get_thread_local_source_face()
-    face_analyser = _thread_local_data.face_analyser
-    processors = _thread_local_data.processors
 
     # Determine which processors to use based on client options
-    active_processor_names = ['face_swapper']
+    frame_processors = [face_swapper]
     if modules.globals.fp_ui.get('face_enhancer', True):
-        active_processor_names.append('face_enhancer')
-    frame_processors = [processors[name] for name in active_processor_names]
+        frame_processors.append(face_enhancer)
 
 
     if modules.globals.map_faces:
