@@ -370,19 +370,25 @@ def process_and_encode_sync(payload_data: str) -> str:
 
 async def receive_frames(websocket: WebSocket, latest_frame: LatestFrame):
     """Task to continuously receive frames and update the latest one."""
-    while True:
-        data = await websocket.receive_text()
-        await latest_frame.set(data)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await latest_frame.set(data)
+    except WebSocketDisconnect:
+        print("Receiver task: WebSocket disconnected. Shutting down.")
 
 async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFrame):
     """Task to process the latest available frame and send it back."""
-    while True:
-        payload_data = await latest_frame.get()
-        if payload_data:
-            processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload_data)
-            await websocket.send_text(processed_frame_b64)
-        else:
-            await asyncio.sleep(0.01) # Avoid busy-waiting
+    try:
+        while True:
+            payload_data = await latest_frame.get()
+            if payload_data:
+                processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload_data)
+                await websocket.send_text(processed_frame_b64)
+            else:
+                await asyncio.sleep(0.01) # Avoid busy-waiting
+    except WebSocketDisconnect:
+        print("Processor task: WebSocket disconnected. Shutting down.")
 
 @app.websocket("/ws/live-preview")
 async def websocket_live_preview(websocket: WebSocket):
