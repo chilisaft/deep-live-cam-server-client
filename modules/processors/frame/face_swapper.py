@@ -1,6 +1,5 @@
 from typing import Any, List
 import cv2
-import insightface
 import threading
 import numpy as np
 import logging # Ensure logging is imported
@@ -56,7 +55,9 @@ def pre_start() -> bool:
 
 
 def get_face_swapper() -> Any:
+    # Import insightface locally to avoid loading it on the client.
     if not hasattr(_thread_local_face_swapper, 'model'):
+        import insightface
         # This is thread-safe. Each thread will initialize its own model instance once.
         model_path = os.path.join(models_dir, "inswapper_128.onnx") # Using the FP32 model
         _thread_local_face_swapper.model = insightface.model_zoo.get_model( # type: ignore

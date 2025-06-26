@@ -1,107 +1,61 @@
-<h1 align="center">Deep-Live-Cam</h1>
+# Deep-Live-Cam Server-Client Application
 
-<p align="center">
-  Real-time face swap and video deepfake with a single click and only a single image.
-</p>
+This repository contains a client-server application for real-time deepfake video processing. The server handles the heavy lifting of machine learning models, while the client provides a lightweight interface for interaction.
 
-<p align="center">
-<a href="https://trendshift.io/repositories/11395" target="_blank"><img src="https://trendshift.io/api/badge/repositories/11395" alt="hacksider%2FDeep-Live-Cam | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</p>
+## Installation
 
-<p align="center">
-  <img src="media/demo.gif" alt="Demo GIF" width="800">
-</p>
+This project uses `pyproject.toml` for dependency management, allowing for separate installations for the server and client components. This ensures that the client remains lightweight and doesn't require large machine learning libraries.
 
-##  Disclaimer
+### Prerequisites
 
-This deepfake software is designed to be a productive tool for the AI-generated media industry. It can assist artists in animating custom characters, creating engaging content, and even using models for clothing design.
+- Python 3.9 or higher
+- `pip` (Python package installer)
+- TODO
 
-We are aware of the potential for unethical applications and are committed to preventative measures. A built-in check prevents the program from processing inappropriate media (nudity, graphic content, sensitive material like war footage, etc.). We will continue to develop this project responsibly, adhering to the law and ethics. We may shut down the project or add watermarks if legally required.
+### Setup
 
-- Ethical Use: Users are expected to use this software responsibly and legally. If using a real person's face, obtain their consent and clearly label any output as a deepfake when sharing online.
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/your-repo/deep-live-cam-server-client.git
+    cd deep-live-cam-server-client
+    ```
 
-- Content Restrictions: The software includes built-in checks to prevent processing inappropriate media, such as nudity, graphic content, or sensitive material.
+2.  **Install Dependencies:**
 
-- Legal Compliance: We adhere to all relevant laws and ethical guidelines. If legally required, we may shut down the project or add watermarks to the output.
+    *   **For the Server (with ML capabilities):**
+        This will install FastAPI, Uvicorn, InsightFace, ONNX Runtime, and other necessary libraries for deepfake processing.
+        ```bash
+        pip install -e .[server]
+        ```
+        **Note:** By default, `onnxruntime-gpu` is specified in `pyproject.toml`. If you are running on a CPU-only server, you will need to manually edit `pyproject.toml` to change `onnxruntime-gpu` to `onnxruntime` before running the installation command.
 
-- User Responsibility: We are not responsible for end-user actions. Users must ensure their use of the software aligns with ethical standards and legal requirements.
+    *   **For the Client (lightweight GUI):**
+        This will install PyQt6 and qasync for the graphical user interface and asynchronous operations.
+        ```bash
+        pip install -e .[client]
+        ```
 
-By using this software, you agree to these terms and commit to using it in a manner that respects the rights and dignity of others.
+## Running the Application
 
-Users are expected to use this software responsibly and legally. If using a real person's face, obtain their consent and clearly label any output as a deepfake when sharing online. We are not responsible for end-user actions.
+### Server
 
-## Exclusive v2.1 Quick Start - Pre-built (Windows/Mac Silicon)
+To start the server, navigate to the `api` directory and run:
+```bash
+python run.py --mode server --execution-provider cuda # Or other provider like cpu, directml, etc.
+```
+*(Note: Replace `cuda` with your desired execution provider. Refer to the `pyproject.toml` for `onnxruntime` variants.)*
 
-  <a href="https://deeplivecam.net/index.php/quickstart"> <img src="media/Download.png" width="285" height="77" />
+### Client
 
-##### This is the fastest build you can get if you have a discrete NVIDIA or AMD GPU or Mac Silicon, And you'll receive special priority support.
- 
-###### These Pre-builts are perfect for non-technical users or those who don't have time to, or can't manually install all the requirements. Just a heads-up: this is an open-source project, so you can also install it manually. 
-
-## TLDR; Live Deepfake in just 3 Clicks
-![easysteps](https://github.com/user-attachments/assets/af825228-852c-411b-b787-ffd9aac72fc6)
-1. Select a face
-2. Select which camera to use
-3. Press live!
-
-## Features & Uses - Everything is in real-time
-
-### Mouth Mask
-
-**Retain your original mouth for accurate movement using Mouth Mask**
-
-<p align="center">
-  <img src="media/ludwig.gif" alt="resizable-gif">
-</p>
-
-### Face Mapping
-
-**Use different faces on multiple subjects simultaneously**
-
-<p align="center">
-  <img src="media/streamers.gif" alt="face_mapping_source">
-</p>
-
-### Your Movie, Your Face
-
-**Watch movies with any face in real-time**
-
-<p align="center">
-  <img src="media/movie.gif" alt="movie">
-</p>
-
-### Live Show
-
-**Run Live shows and performances**
-
-<p align="center">
-  <img src="media/live_show.gif" alt="show">
-</p>
-
-### Memes
-
-**Create Your Most Viral Meme Yet**
-
-<p align="center">
-  <img src="media/meme.gif" alt="show" width="450"> 
-  <br>
-  <sub>Created using Many Faces feature in Deep-Live-Cam</sub>
-</p>
-
-### Omegle
-
-**Surprise people on Omegle**
-
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/2e9b9b82-fa04-4b70-9f56-b1f68e7672d0" width="450" controls></video>
-</p>
+To start the client application:
+```bash
+python run.py # Or your client's specific entry point
+```
 
 ## Installation (Manual)
 
 **Please be aware that the installation requires technical skills and is not for beginners. Consider downloading the prebuilt version.**
 
-<details>
-<summary>Click to see the process</summary>
 
 ### Installation
 
@@ -284,7 +238,6 @@ pip install onnxruntime-openvino==1.15.0
 ```bash
 python run.py --execution-provider openvino
 ```
-</details>
 
 ## Usage
 
@@ -331,25 +284,6 @@ options:
 
 Looking for a CLI mode? Using the -s/--source argument will make the run program in cli mode.
 
-## Press
-
-**We are always open to criticism and are ready to improve, that's why we didn't cherry-pick anything.**
-
- - [*"Deep-Live-Cam goes viral, allowing anyone to become a digital doppelganger"*](https://arstechnica.com/information-technology/2024/08/new-ai-tool-enables-real-time-face-swapping-on-webcams-raising-fraud-concerns/) - Ars Technica
- - [*"Thanks Deep Live Cam, shapeshifters are among us now"*](https://dataconomy.com/2024/08/15/what-is-deep-live-cam-github-deepfake/) - Dataconomy
- - [*"This free AI tool lets you become anyone during video-calls"*](https://www.newsbytesapp.com/news/science/deep-live-cam-ai-impersonation-tool-goes-viral/story) - NewsBytes
- - [*"OK, this viral AI live stream software is truly terrifying"*](https://www.creativebloq.com/ai/ok-this-viral-ai-live-stream-software-is-truly-terrifying) - Creative Bloq
- - [*"Deepfake AI Tool Lets You Become Anyone in a Video Call With Single Photo"*](https://petapixel.com/2024/08/14/deep-live-cam-deepfake-ai-tool-lets-you-become-anyone-in-a-video-call-with-single-photo-mark-zuckerberg-jd-vance-elon-musk/) - PetaPixel
- - [*"Deep-Live-Cam Uses AI to Transform Your Face in Real-Time, Celebrities Included"*](https://www.techeblog.com/deep-live-cam-ai-transform-face/) - TechEBlog
- - [*"An AI tool that "makes you look like anyone" during a video call is going viral online"*](https://telegrafi.com/en/a-tool-that-makes-you-look-like-anyone-during-a-video-call-is-going-viral-on-the-Internet/) - Telegrafi
- - [*"This Deepfake Tool Turning Images Into Livestreams is Topping the GitHub Charts"*](https://decrypt.co/244565/this-deepfake-tool-turning-images-into-livestreams-is-topping-the-github-charts) - Emerge
- - [*"New Real-Time Face-Swapping AI Allows Anyone to Mimic Famous Faces"*](https://www.digitalmusicnews.com/2024/08/15/face-swapping-ai-real-time-mimic/) - Digital Music News
- - [*"This real-time webcam deepfake tool raises alarms about the future of identity theft"*](https://www.diyphotography.net/this-real-time-webcam-deepfake-tool-raises-alarms-about-the-future-of-identity-theft/) - DIYPhotography
- - [*"That's Crazy, Oh God. That's Fucking Freaky Dude... That's So Wild Dude"*](https://www.youtube.com/watch?time_continue=1074&v=py4Tc-Y8BcY) - SomeOrdinaryGamers
- - [*"Alright look look look, now look chat, we can do any face we want to look like chat"*](https://www.youtube.com/live/mFsCe7AIxq8?feature=shared&t=2686) - IShowSpeed
- - [*"They do a pretty good job matching poses, expression and even the lighting"*](https://www.youtube.com/watch?v=wnCghLjqv3s&t=551s) - TechLinked (LTT)
-
-
 ## Credits
 
 -   [ffmpeg](https://ffmpeg.org/): for making video-related operations easy
@@ -364,18 +298,3 @@ Looking for a CLI mode? Using the -s/--source argument will make the run program
 -   Footnote: Please be informed that the base author of the code is [s0md3v](https://github.com/s0md3v/roop)
 -   All the wonderful users who helped make this project go viral by starring the repo ❤️
 
-[![Stargazers](https://reporoster.com/stars/hacksider/Deep-Live-Cam)](https://github.com/hacksider/Deep-Live-Cam/stargazers)
-
-## Contributions
-
-![Alt](https://repobeats.axiom.co/api/embed/fec8e29c45dfdb9c5916f3a7830e1249308d20e1.svg "Repobeats analytics image")
-
-## Stars to the Moon 🚀
-
-<a href="https://star-history.com/#hacksider/deep-live-cam&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hacksider/deep-live-cam&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hacksider/deep-live-cam&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=hacksider/deep-live-cam&type=Date" />
- </picture>
-</a>

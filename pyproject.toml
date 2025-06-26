@@ -1,0 +1,28 @@
+[project]
+name = "deep-live-cam"
+version = "1.0.0"
+description = "Client-server application for real-time deepfake video."
+requires-python = ">=3.9"
+
+# Core dependencies shared by both client and server
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "requests"
+]
+
+[project.optional-dependencies]
+# Server-specific dependencies for ML processing and the API
+server = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "insightface==0.7.3",
+    "onnxruntime-gpu==1.16.3", # For CPU-only servers, change this to "onnxruntime"
+]
+
+# Client-specific dependencies for the GUI and communication
+client = [
+    "PyQt6", # Or another GUI library like PySide6, tkinter, etc.
+    "qasync" # Often used for running asyncio event loops with PyQt
+]
