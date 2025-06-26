@@ -31,7 +31,7 @@ def pre_check() -> bool:
     conditional_download(
         download_directory_path,
         [
-            "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128_fp16.onnx"
+            "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128.onnx" # Using the FP32 model for stability
         ],
     )
     return True
@@ -58,8 +58,8 @@ def pre_start() -> bool:
 def get_face_swapper() -> Any:
     if not hasattr(_thread_local_face_swapper, 'model'):
         # This is thread-safe. Each thread will initialize its own model instance once.
-        model_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
-        _thread_local_face_swapper.model = insightface.model_zoo.get_model(
+        model_path = os.path.join(models_dir, "inswapper_128.onnx") # Using the FP32 model
+        _thread_local_face_swapper.model = insightface.model_zoo.get_model( # type: ignore
             model_path, providers=modules.globals.execution_providers
         )
     return _thread_local_face_swapper.model
@@ -74,20 +74,22 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     if len(temp_frame.shape) == 2: # Grayscale, convert to BGR
         temp_frame = cv2.cvtColor(temp_frame, cv2.COLOR_GRAY2BGR)
 
-    try:
-        # Apply the face swap
-        swapped_frame = face_swapper.get(
-            temp_frame, target_face, source_face, paste_back=True
-        )
-        if swapped_frame is None:
-            logging.error("face_swapper.get() returned None. Swap failed.")
-            return temp_frame # Return original frame if swap fails
-        # Optional: Check if the swapped_frame is mostly black (e.g., all zeros)
-        if swapped_frame.size > 0 and np.all(swapped_frame == 0): # Added size check to prevent error on empty array
-            logging.warning("face_swapper.get() returned an all-black frame. Check model output or input data.")
-    except Exception as e:
-        logging.error(f"Error during face swap: {e}. Returning original frame.")
-        return temp_frame # Return original frame on error
+    # Apply the face swap
+    result = face_swapper.get(
+        temp_frame, target_face, source_face, paste_back=True
+    )
+
+    # Validate the result to prevent pasting noise
+    if result is None:
+        logging.warning("face_swapper.get() returned None. Returning original frame.")
+        return temp_frame
+
+    # The result should be a numpy array of the same shape
+    if not isinstance(result, np.ndarray) or result.shape != temp_frame.shape:
+        logging.warning(f"face_swapper.get() returned an unexpected type or shape. Got {type(result)}. Returning original frame.")
+        return temp_frame
+
+    swapped_frame = result
 
     if modules.globals.mouth_mask:
         # Create a mask for the target face
