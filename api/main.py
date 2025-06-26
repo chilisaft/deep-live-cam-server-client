@@ -291,17 +291,18 @@ def get_thread_local_models_and_source_face() -> tuple[Any, Any, Any]:
             'face_enhancer': face_enhancer_module
         }
 
-    # Analyze the source image to get a thread-local Face object
-    if not hasattr(_thread_local_data, 'source_face'):
-        if LIVE_SOURCE_IMAGE is not None:
-            faces = _thread_local_data.face_analyser.get(LIVE_SOURCE_IMAGE)
-            if faces:
-                _thread_local_data.source_face = sorted(faces, key=lambda x: x.bbox[0])[0]
-            else:
-                _thread_local_data.source_face = None
+    # Always re-analyze the source image to get a thread-local Face object.
+    # This is necessary because threads are reused across different live sessions,
+    # and we must not use a stale source_face from a previous session.
+    if LIVE_SOURCE_IMAGE is not None:
+        faces = _thread_local_data.face_analyser.get(LIVE_SOURCE_IMAGE)
+        if faces:
+            _thread_local_data.source_face = sorted(faces, key=lambda x: x.bbox[0])[0]
         else:
-             _thread_local_data.source_face = None
-
+            _thread_local_data.source_face = None
+    else:
+        _thread_local_data.source_face = None
+        
     return (
         _thread_local_data.face_analyser,
         _thread_local_data.processors,
