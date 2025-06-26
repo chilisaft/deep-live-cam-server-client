@@ -31,7 +31,7 @@ def pre_check() -> bool:
     conditional_download(
         download_directory_path,
         [
-            "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128_fp16.onnx"
+            "https://huggingface.co/hacksider/deep-live-cam/blob/main/inswapper_128_fp16.onnx"
         ],
     )
     return True
@@ -112,6 +112,9 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
 
 
 def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None) -> Frame:
+    if modules.globals.color_correction:
+        temp_frame = cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB)
+
     # If target_faces are not provided, detect them here (fallback for non-live/other calls)
     if target_faces is None:
         if modules.globals.many_faces:
