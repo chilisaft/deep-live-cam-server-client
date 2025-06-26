@@ -31,7 +31,7 @@ def pre_check() -> bool:
     conditional_download(
         download_directory_path,
         [
-            "https://huggingface.co/hacksider/deep-live-cam/blob/main/inswapper_128_fp16.onnx"
+            "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128_fp16.onnx"
         ],
     )
     return True
@@ -112,31 +112,27 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
 
 
 def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None) -> Frame:
-    if modules.globals.color_correction:
-        temp_frame = cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB)
-
-    # If target_faces are not provided, detect them here (fallback for non-live/other calls)
+    # If target_faces are not provided, detect them based on the mode.
     if target_faces is None:
+        logging.debug("target_faces not provided, detecting now.")
         if modules.globals.many_faces:
             target_faces = get_many_faces(temp_frame)
         else:
-            target_faces = [get_one_face(temp_frame)]
+            # get_one_face can return None, so wrap it in a list if found
+            face = get_one_face(temp_frame)
+            target_faces = [face] if face else []
 
-    if modules.globals.many_faces:
-        if target_faces:
-            for target_face in target_faces: # Use the provided/detected target_faces
-                if source_face and target_face:
-                    temp_frame = swap_face(source_face, target_face, temp_frame)
-                else:
-                    print("Face detection failed for target/source.")
-    else:
-        # For single face mode, we expect target_faces to contain at most one face
-        if target_faces and target_faces[0] and source_face:
-            temp_frame = swap_face(source_face, target_faces[0], temp_frame)
-        elif not (target_faces and target_faces[0]): # No target face detected
-            logging.warning("No target face detected in frame for single-face swap (from pre-detected list).")
-        else: # source_face is None
-            logging.error("Source face is None. Cannot perform swap.")
+    if not source_face:
+        logging.error("Source face is None. Cannot perform swap.")
+        return temp_frame
+
+    if not target_faces:
+        logging.warning("No target faces to process in the frame.")
+        return temp_frame
+
+    for target_face in target_faces:
+        if target_face:
+            temp_frame = swap_face(source_face, target_face, temp_frame)
     return temp_frame
 
 
