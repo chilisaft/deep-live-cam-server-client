@@ -7,6 +7,7 @@ import modules.globals
 import logging
 import modules.processors.frame.core
 from modules.face_analyser import get_one_face, get_many_faces, default_source_face
+from modules.typing import Face, Frame, ProcessingContext # Import ProcessingContext
 from modules.typing import Face, Frame
 from modules.utilities import (
     conditional_download,
@@ -38,7 +39,9 @@ def pre_check() -> bool:
 
 def pre_start() -> bool:
     from modules.core import update_status
-    if not modules.globals.map_faces and not is_image(modules.globals.source_path):
+    # This pre_start still relies on modules.globals. This is acceptable for initial checks
+    # as it runs once at startup, not per concurrent request.
+    if not modules.globals.map_faces and not is_image(modules.globals.source_path): # modules.globals.source_path is set by CLI args
         update_status("Select an image for source path.", NAME)
         return False
     elif not modules.globals.map_faces and not get_one_face(
@@ -46,9 +49,7 @@ def pre_start() -> bool:
     ):
         update_status("No face in source path detected.", NAME)
         return False
-    if not is_image(modules.globals.target_path) and not is_video(
-        modules.globals.target_path
-    ):
+    if not is_image(modules.globals.target_path) and not is_video(modules.globals.target_path): # modules.globals.target_path is set by CLI args
         update_status("Select an image or video for target path.", NAME)
         return False
     return True
@@ -61,12 +62,12 @@ def get_face_swapper() -> Any:
         # This is thread-safe. Each thread will initialize its own model instance once.
         model_path = os.path.join(models_dir, "inswapper_128.onnx") # Using the FP32 model
         _thread_local_face_swapper.model = insightface.model_zoo.get_model( # type: ignore
-            model_path, providers=modules.globals.execution_providers
+            model_path, providers=modules.globals.execution_providers # execution_providers is set once at server startup
         )
     return _thread_local_face_swapper.model
 
 
-def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
+def swap_face(source_face: Face, target_face: Face, temp_frame: Frame, context: ProcessingContext) -> Frame:
     face_swapper = get_face_swapper()
 
     # Defensive check: Ensure temp_frame is in the correct format (BGR, uint8)
@@ -92,21 +93,21 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
 
     swapped_frame = result
 
-    if modules.globals.mouth_mask:
+    if context.mouth_mask: # Use context.mouth_mask
         # Create a mask for the target face
         face_mask = create_face_mask(target_face, temp_frame)
 
         # Create the mouth mask
         mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon = (
-            create_lower_mouth_mask(target_face, temp_frame)
+            create_lower_mouth_mask(target_face, temp_frame, context)
         )
 
         # Apply the mouth area
         swapped_frame = apply_mouth_area(
-            swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon
+            swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon, context
         )
 
-        if modules.globals.show_mouth_mask_box:
+        if context.show_mouth_mask_box: # Use context.show_mouth_mask_box
             mouth_mask_data = (mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon)
             swapped_frame = draw_mouth_mask_visualization(
                 swapped_frame, target_face, mouth_mask_data
@@ -114,11 +115,11 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     return swapped_frame
 
 
-def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None) -> Frame:
+def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face] = None, context: ProcessingContext = None) -> Frame:
     # If target_faces are not provided, detect them based on the mode.
     if target_faces is None:
         logging.debug("target_faces not provided, detecting now.")
-        if modules.globals.many_faces:
+        if context.many_faces: # Use context.many_faces
             target_faces = get_many_faces(temp_frame)
         else:
             # get_one_face can return None, so wrap it in a list if found
@@ -135,86 +136,86 @@ def process_frame(source_face: Face, temp_frame: Frame, target_faces: List[Face]
 
     for target_face in target_faces:
         if target_face:
-            temp_frame = swap_face(source_face, target_face, temp_frame)
+            temp_frame = swap_face(source_face, target_face, temp_frame, context) # Pass context
     return temp_frame
 
 
 
-def process_frame_v2(temp_frame: Frame, temp_frame_path: str = "") -> Frame:
-    if is_image(modules.globals.target_path):
-        if modules.globals.many_faces:
+def process_frame_v2(temp_frame: Frame, temp_frame_path: str = "", context: ProcessingContext = None) -> Frame:
+    if is_image(context.target_path): # Use context.target_path
+        if context.many_faces: # Use context.many_faces
             source_face = default_source_face()
-            for map in modules.globals.source_target_map:
-                target_face = map["target"]["face"]
-                temp_frame = swap_face(source_face, target_face, temp_frame)
+            for map_item in context.source_target_map:
+                target_face = map_item["target"]["face"]
+                temp_frame = swap_face(source_face, target_face, temp_frame, context) # Pass context
 
-        elif not modules.globals.many_faces:
-            for map in modules.globals.source_target_map:
-                if "source" in map:
-                    source_face = map["source"]["face"]
-                    target_face = map["target"]["face"]
-                    temp_frame = swap_face(source_face, target_face, temp_frame)
+        elif not context.many_faces: # Use context.many_faces
+            for map_item in context.source_target_map:
+                if "source" in map_item:
+                    source_face = map_item["source"]["face"]
+                    target_face = map_item["target"]["face"]
+                    temp_frame = swap_face(source_face, target_face, temp_frame, context) # Pass context
 
-    elif is_video(modules.globals.target_path):
-        if modules.globals.many_faces:
+    elif is_video(context.target_path): # Use context.target_path
+        if context.many_faces: # Use context.many_faces
             source_face = default_source_face()
-            for map in modules.globals.source_target_map:
+            for map_item in context.source_target_map:
                 target_frame = [
                     f
-                    for f in map["target_faces_in_frame"]
+                    for f in map_item["target_faces_in_frame"]
                     if f["location"] == temp_frame_path
                 ]
 
                 for frame in target_frame:
                     for target_face in frame["faces"]:
-                        temp_frame = swap_face(source_face, target_face, temp_frame)
+                        temp_frame = swap_face(source_face, target_face, temp_frame, context) # Pass context
 
-        elif not modules.globals.many_faces:
-            for map in modules.globals.source_target_map:
-                if "source" in map:
+        elif not context.many_faces: # Use context.many_faces
+            for map_item in context.source_target_map:
+                if "source" in map_item:
                     target_frame = [
                         f
-                        for f in map["target_faces_in_frame"]
+                        for f in map_item["target_faces_in_frame"]
                         if f["location"] == temp_frame_path
                     ]
-                    source_face = map["source"]["face"]
+                    source_face = map_item["source"]["face"]
 
                     for frame in target_frame:
                         for target_face in frame["faces"]:
-                            temp_frame = swap_face(source_face, target_face, temp_frame)
+                            temp_frame = swap_face(source_face, target_face, temp_frame, context) # Pass context
 
     else:
         detected_faces = get_many_faces(temp_frame)
-        if modules.globals.many_faces:
+        if context.many_faces: # Use context.many_faces
             if detected_faces:
                 source_face = default_source_face()
                 for target_face in detected_faces:
-                    temp_frame = swap_face(source_face, target_face, temp_frame)
+                    temp_frame = swap_face(source_face, target_face, temp_frame, context) # Pass context
 
-        elif not modules.globals.many_faces:
+        elif not context.many_faces: # Use context.many_faces
             if detected_faces:
                 if len(detected_faces) <= len(
-                    modules.globals.simple_map["target_embeddings"]
+                    context.simple_map["target_embeddings"] # Use context.simple_map
                 ):
                     for detected_face in detected_faces:
                         closest_centroid_index, _ = find_closest_centroid(
-                            modules.globals.simple_map["target_embeddings"],
+                            context.simple_map["target_embeddings"], # Use context.simple_map
                             detected_face.normed_embedding,
                         )
 
                         temp_frame = swap_face(
-                            modules.globals.simple_map["source_faces"][
+                            context.simple_map["source_faces"][
                                 closest_centroid_index
                             ],
                             detected_face,
                             temp_frame,
                         )
                 else:
-                    detected_faces_centroids = []
+                    detected_faces_centroids = [] # This is local, fine.
                     for face in detected_faces:
                         detected_faces_centroids.append(face.normed_embedding)
                     i = 0
-                    for target_embedding in modules.globals.simple_map[
+                    for target_embedding in context.simple_map[ # Use context.simple_map
                         "target_embeddings"
                     ]:
                         closest_centroid_index, _ = find_closest_centroid(
@@ -222,7 +223,7 @@ def process_frame_v2(temp_frame: Frame, temp_frame_path: str = "") -> Frame:
                         )
 
                         temp_frame = swap_face(
-                            modules.globals.simple_map["source_faces"][i],
+                            context.simple_map["source_faces"][i],
                             detected_faces[closest_centroid_index],
                             temp_frame,
                         )
@@ -230,26 +231,24 @@ def process_frame_v2(temp_frame: Frame, temp_frame_path: str = "") -> Frame:
     return temp_frame
 
 
-def process_frames(
-    source_path: str, temp_frame_paths: List[str], progress: Any = None
-) -> None:
-    if not modules.globals.map_faces:
+def process_frames(source_path: str, temp_frame_paths: List[str], progress: Any = None, context: ProcessingContext = None) -> None:
+    if not context.map_faces: # Use context.map_faces
         source_face = get_one_face(cv2.imread(source_path))
         for temp_frame_path in temp_frame_paths:
             temp_frame = cv2.imread(temp_frame_path)
             try:
-                result = process_frame(source_face, temp_frame)
+                result = process_frame(source_face, temp_frame, context=context) # Pass context
                 cv2.imwrite(temp_frame_path, result)
             except Exception as exception:
                 print(exception)
                 pass
             if progress:
                 progress.update(1)
-    else:
+    else: # context.map_faces is True
         for temp_frame_path in temp_frame_paths:
             temp_frame = cv2.imread(temp_frame_path)
             try:
-                result = process_frame_v2(temp_frame, temp_frame_path)
+                result = process_frame_v2(temp_frame, temp_frame_path, context=context) # Pass context
                 cv2.imwrite(temp_frame_path, result)
             except Exception as exception:
                 print(exception)
@@ -258,36 +257,40 @@ def process_frames(
                 progress.update(1)
 
 
-def process_image(source_path: str, target_path: str, output_path: str) -> None:
+def process_image(source_path: str, target_path: str, output_path: str, context: ProcessingContext = None) -> None:
     from modules.core import update_status
-    if not modules.globals.map_faces:
+    # This function is called by api/main.py's process_batch_job_sync.
+    # It needs to use the context for its options.
+    if not context.map_faces: # Use context.map_faces
         source_face = get_one_face(cv2.imread(source_path))
         target_frame = cv2.imread(target_path)
-        result = process_frame(source_face, target_frame)
+        result = process_frame(source_face, target_frame, context=context) # Pass context
         cv2.imwrite(output_path, result)
-    else:
-        if modules.globals.many_faces:
+    else: # context.map_faces is True
+        if context.many_faces: # Use context.many_faces
             update_status(
                 "Many faces enabled. Using first source image. Progressing...", NAME
             )
         target_frame = cv2.imread(output_path)
-        result = process_frame_v2(target_frame)
+        result = process_frame_v2(target_frame, context=context) # Pass context
         cv2.imwrite(output_path, result)
 
 
-def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
+def process_video(source_path: str, temp_frame_paths: List[str], context: ProcessingContext = None) -> None:
     from modules.core import update_status
-    if modules.globals.map_faces and modules.globals.many_faces:
+    # This function is called by api/main.py's process_batch_job_sync.
+    # It needs to use the context for its options.
+    if context.map_faces and context.many_faces: # Use context.map_faces and context.many_faces
         update_status(
             "Many faces enabled. Using first source image. Progressing...", NAME
         )
     modules.processors.frame.core.process_video(
-        source_path, temp_frame_paths, process_frames
+        source_path, temp_frame_paths, process_frames, context=context # Pass context
     )
 
 
 def create_lower_mouth_mask(
-    face: Face, frame: Frame
+    face: Face, frame: Frame, context: ProcessingContext
 ) -> (np.ndarray, np.ndarray, tuple, np.ndarray):
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     mouth_cutout = None
@@ -325,9 +328,7 @@ def create_lower_mouth_mask(
         center = np.mean(lower_lip_landmarks, axis=0)
 
         # Expand the landmarks outward
-        expansion_factor = (
-            1 + modules.globals.mask_down_size
-        )  # Adjust this for more or less expansion
+        expansion_factor = 1 + context.mask_down_size
         expanded_landmarks = (lower_lip_landmarks - center) * expansion_factor + center
 
         # Extend the top lip part
@@ -340,9 +341,7 @@ def create_lower_mouth_mask(
             4,
             5,
         ]  # Indices for landmarks 2, 65, 66, 62, 70, 69, 18
-        toplip_extension = (
-            modules.globals.mask_size * 0.5
-        )  # Adjust this factor to control the extension
+        toplip_extension = context.mask_size * 0.5
         for idx in toplip_indices:
             direction = expanded_landmarks[idx] - center
             direction = direction / np.linalg.norm(direction)
@@ -443,8 +442,8 @@ def draw_mouth_mask_visualization(
             1,
             min(
                 30,
-                (max_x - min_x) // modules.globals.mask_feather_ratio,
-                (max_y - min_y) // modules.globals.mask_feather_ratio,
+                (max_x - min_x) // context.mask_feather_ratio,
+                (max_y - min_y) // context.mask_feather_ratio,
             ),
         )
         # Ensure kernel size is odd
@@ -490,7 +489,7 @@ def apply_mouth_area(
     mouth_cutout: np.ndarray,
     mouth_box: tuple,
     face_mask: np.ndarray,
-    mouth_polygon: np.ndarray,
+    mouth_polygon: np.ndarray, context: ProcessingContext
 ) -> np.ndarray:
     min_x, min_y, max_x, max_y = mouth_box
     box_width = max_x - min_x
@@ -524,8 +523,8 @@ def apply_mouth_area(
         # Apply feathering to the polygon mask
         feather_amount = min(
             30,
-            box_width // modules.globals.mask_feather_ratio,
-            box_height // modules.globals.mask_feather_ratio,
+            box_width // context.mask_feather_ratio,
+            box_height // context.mask_feather_ratio,
         )
         feathered_mask = cv2.GaussianBlur(
             polygon_mask.astype(float), (0, 0), feather_amount

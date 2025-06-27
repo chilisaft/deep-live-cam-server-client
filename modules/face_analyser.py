@@ -1,7 +1,6 @@
 import os
 import shutil
 from typing import Any
-import insightface
 
 import cv2
 import numpy as np
@@ -19,6 +18,7 @@ def get_face_analyser() -> Any:
     global FACE_ANALYSER
 
     if FACE_ANALYSER is None:
+        import insightface
         FACE_ANALYSER = insightface.app.FaceAnalysis(name='buffalo_l', providers=modules.globals.execution_providers)
         FACE_ANALYSER.prepare(ctx_id=0, det_size=(640, 640))
     return FACE_ANALYSER

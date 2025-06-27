@@ -16,9 +16,6 @@ import threading
 import queue
 import modules.api_client as api_client
 from modules.face_analyser import (
-    get_one_face,
-    get_unique_faces_from_target_image,
-    get_unique_faces_from_target_video,
     add_blank_map,
     has_valid_map,
     simplify_maps,
@@ -313,7 +310,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     show_mouth_mask_box_switch.place(relx=0.6, rely=0.55)
 
     start_button = ctk.CTkButton(
-        root, text=_("Start"), cursor="hand2", command=lambda: analyze_target(start, root)
+        root, text=_("Start"), cursor="hand2", command=lambda: analyze_target(start)
     )
     start_button.place(relx=0.15, rely=0.80, relwidth=0.2, relheight=0.05)
 
@@ -323,7 +320,10 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     stop_button.place(relx=0.4, rely=0.80, relwidth=0.2, relheight=0.05)
 
     preview_button = ctk.CTkButton(
-        root, text=_("Preview"), cursor="hand2", command=lambda: toggle_preview()
+        root,
+        text=_("Preview (Disabled)"),
+        state="disabled",
+        # command=lambda: toggle_preview() # Command removed
     )
     preview_button.place(relx=0.65, rely=0.80, relwidth=0.2, relheight=0.05)
 
@@ -403,7 +403,7 @@ def close_mapper_window():
         POPUP_LIVE = None
 
 
-def analyze_target(start: Callable[[], None], root: ctk.CTk):
+def analyze_target(start: Callable[[], None]):
     if POPUP != None and POPUP.winfo_exists():
         update_status("Please complete pop-up or close it.")
         return
@@ -420,7 +420,7 @@ def analyze_target(start: Callable[[], None], root: ctk.CTk):
 
         if source_target_map:
             update_status(f"Found {len(source_target_map)} unique faces.")
-            create_source_target_popup(start, root, source_target_map)
+            create_source_target_popup(start, source_target_map)
         else:
             update_status("No faces found in target or server error.")
     else:
@@ -428,11 +428,11 @@ def analyze_target(start: Callable[[], None], root: ctk.CTk):
 
 
 def create_source_target_popup(
-        start: Callable[[], None], root: ctk.CTk, map: list
+    start: Callable[[], None], face_map: list
 ) -> None:
     global POPUP, popup_status_label
 
-    POPUP = ctk.CTkToplevel(root)
+    POPUP = ctk.CTkToplevel(ROOT)
     POPUP.title(_("Source x Target Mapper"))
     POPUP.geometry(f"{POPUP_WIDTH}x{POPUP_HEIGHT}")
     POPUP.focus()
@@ -450,15 +450,15 @@ def create_source_target_popup(
     scrollable_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
 
     def on_button_click(map, button_num):
-        map = update_popup_source(scrollable_frame, map, button_num)
+        update_popup_source(scrollable_frame, map, button_num)
 
-    for item in map:
+    for item in face_map:
         id = item["id"]
 
         button = ctk.CTkButton(
             scrollable_frame,
             text=_("Select source image"),
-            command=lambda id=id: on_button_click(map, id),
+            command=lambda id=id: on_button_click(face_map, id),
             width=DEFAULT_BUTTON_WIDTH,
             height=DEFAULT_BUTTON_HEIGHT,
         )
@@ -497,8 +497,8 @@ def create_source_target_popup(
 
 
 def update_popup_source(
-        scrollable_frame: ctk.CTkScrollableFrame, map: list, button_num: int
-) -> list:
+    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int
+) -> None:
     global source_label_dict
 
     source_path = ctk.filedialog.askopenfilename(
@@ -507,27 +507,33 @@ def update_popup_source(
         filetypes=[img_ft],
     )
 
-    if "source" in map[button_num]:
-        map[button_num].pop("source")
-        source_label_dict[button_num].destroy()
-        del source_label_dict[button_num]
+    if "source" in face_map[button_num]:
+        face_map[button_num].pop("source")
+        if button_num in source_label_dict:
+            source_label_dict[button_num].destroy()
+            del source_label_dict[button_num]
 
-    if source_path == "":
-        return map
-    else:
-        cv2_img = cv2.imread(source_path)
-        face = get_one_face(cv2_img)
+    if not source_path:
+        return
 
-        if face:
-            x_min, y_min, x_max, y_max = face["bbox"]
+    update_pop_status("Analyzing source face on server...")
+    # Use the API client to analyze the selected source image
+    api_face_map = api_client.request_face_analysis(source_path)
 
-            map[button_num]["source"] = {
-                "cv2": cv2_img[int(y_min): int(y_max), int(x_min): int(x_max)],
-                "face": face,
-            }
+    if api_face_map and api_face_map[0].get("target"):
+        # The server returns a list of faces. We'll use the first one.
+        face_data = api_face_map[0]["target"]
+        face = face_data["face"]
+        cv2_img_face_crop = face_data["cv2"]
 
+        face_map[button_num]["source"] = {
+            "cv2": cv2_img_face_crop,
+            "face": face,
+        }
+
+        try:
             image = Image.fromarray(
-                cv2.cvtColor(map[button_num]["source"]["cv2"], cv2.COLOR_BGR2RGB)
+                cv2.cvtColor(face_map[button_num]["source"]["cv2"], cv2.COLOR_BGR2RGB)
             )
             image = image.resize(
                 (MAPPER_PREVIEW_MAX_WIDTH, MAPPER_PREVIEW_MAX_HEIGHT), Image.LANCZOS
@@ -543,9 +549,11 @@ def update_popup_source(
             source_image.grid(row=button_num, column=1, padx=10, pady=10)
             source_image.configure(image=tk_image)
             source_label_dict[button_num] = source_image
-        else:
-            update_pop_status("Face could not be detected in last upload!")
-        return map
+            update_pop_status("Source face set.")
+        except Exception as e:
+            update_pop_status(f"UI Error: {e}")
+    else:
+        update_pop_status("Face could not be detected in last upload!")
 
 
 def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
@@ -698,7 +706,8 @@ def select_output_path(start: Callable[[], None]) -> None:
             "video_quality": modules.globals.video_quality,
             "mouth_mask": modules.globals.mouth_mask,
             "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-            "simple_map": modules.globals.simple_map # For mapped faces
+            "simple_map": modules.globals.simple_map, # For mapped faces
+            "source_target_map": modules.globals.source_target_map
         }
 
         update_status("Sending job to server...")
@@ -784,14 +793,18 @@ def render_video_preview(
 
 
 def toggle_preview() -> None:
+    # This feature is disabled as it relies on local processing.
+    # The live preview feature provides a better, server-based alternative.
     if PREVIEW.state() == "normal":
         PREVIEW.withdraw()
     elif modules.globals.source_path and modules.globals.target_path:
-        init_preview()
-        update_preview()
+        # init_preview()
+        # update_preview()
+        pass
 
 
 def init_preview() -> None:
+    # This feature is disabled.
     if is_image(modules.globals.target_path):
         preview_slider.pack_forget()
     if is_video(modules.globals.target_path):
@@ -802,17 +815,20 @@ def init_preview() -> None:
 
 
 def update_preview(frame_number: int = 0) -> None:
+    # This feature is disabled as it relies on local processing.
     if modules.globals.source_path and modules.globals.target_path:
         update_status("Processing...")
         temp_frame = get_video_frame(modules.globals.target_path, frame_number)
-        if modules.globals.nsfw_filter and check_and_ignore_nsfw(temp_frame):
-            return
-        for frame_processor in get_frame_processors_modules(
-                modules.globals.frame_processors
-        ):
-            temp_frame = frame_processor.process_frame(
-                get_one_face(cv2.imread(modules.globals.source_path)), temp_frame
-            )
+        # The following block is disabled because it performs local processing.
+        # if modules.globals.nsfw_filter and check_and_ignore_nsfw(temp_frame):
+        #     return
+        # for frame_processor in get_frame_processors_modules(
+        #         modules.globals.frame_processors
+        # ):
+        #     # This line requires local insightface and is therefore disabled.
+        #     # temp_frame = frame_processor.process_frame(
+        #     #     get_one_face(cv2.imread(modules.globals.source_path)), temp_frame
+        #     # )
         image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
         image = ImageOps.contain(
             image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS
@@ -934,8 +950,10 @@ def create_networked_webcam_preview(camera_index: int) -> None:
     cap = None
     stop_event = threading.Event()
     frame_queue = queue.Queue(maxsize=2)  # Use a queue to pass frames from receiver to main thread
+    can_send_frame = threading.Event() # Event to control frame sending rate
+    can_send_frame.set() # Initially, we are allowed to send a frame
 
-    def receiver_thread(ws_socket: websocket.WebSocket, q: queue.Queue, stop: threading.Event) -> None:
+    def receiver_thread(ws_socket: websocket.WebSocket, q: queue.Queue, stop: threading.Event, can_send: threading.Event) -> None:
         """Listens for incoming messages from the server and puts them in a queue."""
         while not stop.is_set():
             try:
@@ -949,6 +967,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 if q.full():
                     q.get_nowait()  # Discard the oldest frame if the queue is full
                 q.put(processed_frame)
+                can_send.set() # Signal that we've received a response and can send the next frame
             except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
                 update_status("Connection to server lost.")
                 break
@@ -968,7 +987,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
             raise RuntimeError("Failed to start camera")
 
         # Start the receiver thread
-        receiver = threading.Thread(target=receiver_thread, args=(ws, frame_queue, stop_event))
+        receiver = threading.Thread(target=receiver_thread, args=(ws, frame_queue, stop_event, can_send_frame))
         receiver.start()
 
         preview_label.configure(width=PREVIEW_DEFAULT_WIDTH, height=PREVIEW_DEFAULT_HEIGHT)
@@ -982,32 +1001,38 @@ def create_networked_webcam_preview(camera_index: int) -> None:
             if not ret:
                 break
 
-            # --- Sending Part (unconditional streaming) ---
-            frame_to_send = current_frame
-            if modules.globals.live_mirror:
-                frame_to_send = cv2.flip(frame_to_send, 1)
+            # --- Sending Part (with rate-limiting) ---
+            if can_send_frame.is_set():
+                can_send_frame.clear() # Reset the event until the next response is received
 
-            _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 65]) # Reduced quality for faster transfer
-            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+                frame_to_send = current_frame
+                if modules.globals.live_mirror:
+                    frame_to_send = cv2.flip(frame_to_send, 1)
 
-            options = {
-                "many_faces": modules.globals.many_faces,
-                "map_faces": modules.globals.map_faces,
-                "color_correction": modules.globals.color_correction,
-                "mouth_mask": modules.globals.mouth_mask,
-                "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-                "fp_ui": modules.globals.fp_ui
-            }
+                _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 65]) # Reduced quality for faster transfer
+                frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            payload_data = {'frame': frame_b64, 'options': options}
-            if modules.globals.map_faces:
-                payload_data['simple_map'] = modules.globals.simple_map
-            
-            try:
-                ws.send(json.dumps(payload_data))
-            except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
-                stop_event.set() # Stop the loop if connection is lost
-                continue
+                options = {
+                    "many_faces": modules.globals.many_faces,
+                    "map_faces": modules.globals.map_faces,
+                    "color_correction": modules.globals.color_correction,
+                    "mouth_mask": modules.globals.mouth_mask,
+                    "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
+                    "fp_ui": modules.globals.fp_ui
+                }
+
+                if modules.globals.map_faces:
+                    # For live preview, simple_map is used for multi-face mapping
+                    options['simple_map'] = modules.globals.simple_map
+                    options['source_target_map'] = modules.globals.source_target_map
+
+                payload_data = {'frame': frame_b64, 'options': options}
+                
+                try:
+                    ws.send(json.dumps(payload_data))
+                except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
+                    stop_event.set() # Stop the loop if connection is lost
+                    continue
 
             # --- Receiving/Display Part (non-blocking) ---
             try:
@@ -1183,8 +1208,8 @@ def refresh_data(map: list):
 
 
 def update_webcam_source(
-        scrollable_frame: ctk.CTkScrollableFrame, map: list, button_num: int
-) -> list:
+    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int
+) -> None:
     global source_label_dict_live
 
     source_path = ctk.filedialog.askopenfilename(
@@ -1193,27 +1218,31 @@ def update_webcam_source(
         filetypes=[img_ft],
     )
 
-    if "source" in map[button_num]:
-        map[button_num].pop("source")
-        source_label_dict_live[button_num].destroy()
-        del source_label_dict_live[button_num]
+    if "source" in face_map[button_num]:
+        face_map[button_num].pop("source")
+        if button_num in source_label_dict_live:
+            source_label_dict_live[button_num].destroy()
+            del source_label_dict_live[button_num]
 
-    if source_path == "":
-        return map
-    else:
-        cv2_img = cv2.imread(source_path)
-        face = get_one_face(cv2_img)
+    if not source_path:
+        return
 
-        if face:
-            x_min, y_min, x_max, y_max = face["bbox"]
+    update_pop_live_status("Analyzing source face on server...")
+    api_face_map = api_client.request_face_analysis(source_path)
 
-            map[button_num]["source"] = {
-                "cv2": cv2_img[int(y_min): int(y_max), int(x_min): int(x_max)],
-                "face": face,
-            }
+    if api_face_map and api_face_map[0].get("target"):
+        face_data = api_face_map[0]["target"]
+        face = face_data["face"]
+        cv2_img_face_crop = face_data["cv2"]
 
+        face_map[button_num]["source"] = {
+            "cv2": cv2_img_face_crop,
+            "face": face,
+        }
+
+        try:
             image = Image.fromarray(
-                cv2.cvtColor(map[button_num]["source"]["cv2"], cv2.COLOR_BGR2RGB)
+                cv2.cvtColor(face_map[button_num]["source"]["cv2"], cv2.COLOR_BGR2RGB)
             )
             image = image.resize(
                 (MAPPER_PREVIEW_MAX_WIDTH, MAPPER_PREVIEW_MAX_HEIGHT), Image.LANCZOS
@@ -1229,43 +1258,49 @@ def update_webcam_source(
             source_image.grid(row=button_num, column=1, padx=10, pady=10)
             source_image.configure(image=tk_image)
             source_label_dict_live[button_num] = source_image
-        else:
-            update_pop_live_status("Face could not be detected in last upload!")
-        return map
+            update_pop_live_status("Source face set.")
+        except Exception as e:
+            update_pop_live_status(f"UI Error: {e}")
+    else:
+        update_pop_live_status("Face could not be detected in last upload!")
 
 
 def update_webcam_target(
-        scrollable_frame: ctk.CTkScrollableFrame, map: list, button_num: int
-) -> list:
+    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int
+) -> None:
     global target_label_dict_live
 
     target_path = ctk.filedialog.askopenfilename(
         title=_("select a target image"),
-        initialdir=RECENT_DIRECTORY_SOURCE,
+        initialdir=RECENT_DIRECTORY_TARGET,
         filetypes=[img_ft],
     )
 
-    if "target" in map[button_num]:
-        map[button_num].pop("target")
-        target_label_dict_live[button_num].destroy()
-        del target_label_dict_live[button_num]
+    if "target" in face_map[button_num]:
+        face_map[button_num].pop("target")
+        if button_num in target_label_dict_live:
+            target_label_dict_live[button_num].destroy()
+            del target_label_dict_live[button_num]
 
-    if target_path == "":
-        return map
-    else:
-        cv2_img = cv2.imread(target_path)
-        face = get_one_face(cv2_img)
+    if not target_path:
+        return
 
-        if face:
-            x_min, y_min, x_max, y_max = face["bbox"]
+    update_pop_live_status("Analyzing target face on server...")
+    api_face_map = api_client.request_face_analysis(target_path)
 
-            map[button_num]["target"] = {
-                "cv2": cv2_img[int(y_min): int(y_max), int(x_min): int(x_max)],
-                "face": face,
-            }
+    if api_face_map and api_face_map[0].get("target"):
+        face_data = api_face_map[0]["target"]
+        face = face_data["face"]
+        cv2_img_face_crop = face_data["cv2"]
 
+        face_map[button_num]["target"] = {
+            "cv2": cv2_img_face_crop,
+            "face": face,
+        }
+
+        try:
             image = Image.fromarray(
-                cv2.cvtColor(map[button_num]["target"]["cv2"], cv2.COLOR_BGR2RGB)
+                cv2.cvtColor(face_map[button_num]["target"]["cv2"], cv2.COLOR_BGR2RGB)
             )
             image = image.resize(
                 (MAPPER_PREVIEW_MAX_WIDTH, MAPPER_PREVIEW_MAX_HEIGHT), Image.LANCZOS
@@ -1281,6 +1316,8 @@ def update_webcam_target(
             target_image.grid(row=button_num, column=4, padx=20, pady=10)
             target_image.configure(image=tk_image)
             target_label_dict_live[button_num] = target_image
-        else:
-            update_pop_live_status("Face could not be detected in last upload!")
-        return map
+            update_pop_live_status("Target face set.")
+        except Exception as e:
+            update_pop_live_status(f"UI Error: {e}")
+    else:
+        update_pop_live_status("Face could not be detected in last upload!")

@@ -9,6 +9,7 @@ import urllib
 from pathlib import Path
 from typing import List, Any
 from tqdm import tqdm
+from modules.typing import ProcessingContext
 
 import modules.globals
 
@@ -73,7 +74,7 @@ def extract_frames(target_path: str) -> None:
     )
 
 
-def create_video(target_path: str, fps: float = 30.0) -> None:
+def create_video(target_path: str, fps: float = 30.0, context: ProcessingContext = None) -> None:
     temp_output_path = get_temp_output_path(target_path)
     temp_directory_path = get_temp_directory_path(target_path)
     run_ffmpeg(
@@ -83,9 +84,9 @@ def create_video(target_path: str, fps: float = 30.0) -> None:
             "-i",
             os.path.join(temp_directory_path, "%04d.png"),
             "-c:v",
-            modules.globals.video_encoder,
+            context.video_encoder if context else modules.globals.video_encoder,
             "-crf",
-            str(modules.globals.video_quality),
+            str(context.video_quality) if context else str(modules.globals.video_quality),
             "-pix_fmt",
             "yuv420p",
             "-vf",
@@ -158,10 +159,10 @@ def move_temp(target_path: str, output_path: str) -> None:
         shutil.move(temp_output_path, output_path)
 
 
-def clean_temp(target_path: str) -> None:
+def clean_temp(target_path: str, context: ProcessingContext = None) -> None:
     temp_directory_path = get_temp_directory_path(target_path)
     parent_directory_path = os.path.dirname(temp_directory_path)
-    if not modules.globals.keep_frames and os.path.isdir(temp_directory_path):
+    if (not context or not context.keep_frames) and os.path.isdir(temp_directory_path):
         shutil.rmtree(temp_directory_path)
     if os.path.exists(parent_directory_path) and not os.listdir(parent_directory_path):
         os.rmdir(parent_directory_path)

@@ -1,16 +1,16 @@
 import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
 from typing import Any
 
 
 def find_cluster_centroids(embeddings, max_k=10) -> Any:
+    from sklearn.cluster import KMeans # Lazy import
+    # from sklearn.metrics import silhouette_score # Lazy import if needed
     inertia = []
     cluster_centroids = []
     K = range(1, max_k+1)
 
     for k in K:
-        kmeans = KMeans(n_clusters=k, random_state=0)
+        kmeans = KMeans(n_clusters=k, random_state=0, n_init='auto') # Added n_init='auto' to suppress future warning
         kmeans.fit(embeddings)
         inertia.append(kmeans.inertia_)
         cluster_centroids.append({"k": k, "centroids": kmeans.cluster_centers_})

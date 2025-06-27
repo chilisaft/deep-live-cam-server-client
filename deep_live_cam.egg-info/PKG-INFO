@@ -1,0 +1,37 @@
+Metadata-Version: 2.4
+Name: deep-live-cam
+Version: 1.0.0
+Summary: Client-server application for real-time deepfake video.
+Requires-Python: >=3.9
+License-File: LICENSE
+Requires-Dist: numpy<2,>=1.23.5
+Requires-Dist: typing-extensions>=4.8.0
+Requires-Dist: opencv-python==4.10.0.84
+Requires-Dist: pillow==11.1.0
+Provides-Extra: server
+Requires-Dist: onnx==1.16.0; extra == "server"
+Requires-Dist: insightface==0.7.3; extra == "server"
+Requires-Dist: psutil==5.9.8; extra == "server"
+Requires-Dist: fastapi==0.111.0; extra == "server"
+Requires-Dist: uvicorn[standard]==0.30.1; extra == "server"
+Requires-Dist: python-multipart>=0.0.9; extra == "server"
+Requires-Dist: onnxruntime-gpu==1.17.1; extra == "server"
+Requires-Dist: tensorflow; sys_platform != "darwin" and extra == "server"
+Requires-Dist: opennsfw2==0.10.2; extra == "server"
+Requires-Dist: gfpgan>=1.3.8; extra == "server"
+Requires-Dist: websockets>=12.0; extra == "server"
+Requires-Dist: protobuf==4.23.2; extra == "server"
+Requires-Dist: torch==2.1.2+cu121; sys_platform != "darwin" and extra == "server"
+Requires-Dist: torch==2.1.2; sys_platform == "darwin" and extra == "server"
+Requires-Dist: torchvision==0.16.2+cu121; sys_platform != "darwin" and extra == "server"
+Requires-Dist: torchvision==0.16.2; sys_platform == "darwin" and extra == "server"
+Requires-Dist: onnxruntime-silicon==1.13.1; (sys_platform == "darwin" and platform_machine == "arm64") and extra == "server"
+Provides-Extra: client
+Requires-Dist: customtkinter==5.2.2; extra == "client"
+Requires-Dist: tk==0.1.0; extra == "client"
+Requires-Dist: websocket-client>=1.8.0; extra == "client"
+Requires-Dist: cv2_enumerate_cameras==1.1.15; extra == "client"
+Requires-Dist: pygrabber; platform_system == "Windows" and extra == "client"
+Requires-Dist: requests>=2.31.0; extra == "client"
+Requires-Dist: tqdm>=4.66.2; extra == "client"
+Dynamic: license-file

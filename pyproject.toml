@@ -9,9 +9,6 @@ dependencies = [
     "numpy>=1.23.5,<2",
     "typing-extensions>=4.8.0",
     "opencv-python==4.10.0.84",
-    "requests>=2.31.0",
-    "protobuf==4.23.2",
-    "tqdm>=4.66.2",
     "pillow==11.1.0",
 ]
 
@@ -29,6 +26,8 @@ server = [
     "opennsfw2==0.10.2",
     "gfpgan>=1.3.8",
     "websockets>=12.0", # For WebSocket server in api/main.py
+    "protobuf==4.23.2", # Dependency for onnx/tensorflow
+    "scikit-learn>=1.0.0", # For KMeans clustering in face analysis
     # PyTorch and torchvision are often required by ML libraries like insightface, gfpgan, or tensorflow
     "torch==2.1.2+cu121; sys_platform != 'darwin'", # Aligned with system CUDA 12.x
     "torch==2.1.2; sys_platform == 'darwin'",
@@ -43,7 +42,9 @@ client = [
     "tk==0.1.0", # Required by customtkinter
     "websocket-client>=1.8.0",  # For WebSocket client communication
     "cv2_enumerate_cameras==1.1.15", # For listing available cameras in the UI
-    "pygrabber; platform_system == \"Windows\"",  # For Windows camera enumeration
+    "pygrabber; platform_system == 'Windows'",  # For Windows camera enumeration
+    "requests>=2.31.0", # For making API calls to the server
+    "tqdm>=4.66.2", # For download progress bars
 ]
 
 [tool.setuptools]

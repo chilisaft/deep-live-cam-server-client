@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import modules.globals
 from modules.face_analyser import get_one_face, get_unique_faces_from_target_image, get_unique_faces_from_target_video
 from modules.processors.frame.core import get_frame_processors_modules
+from modules.typing import ProcessingContext # Import the new context class
 from modules.utilities import is_image, is_video
 
 # Attempt to pre-load the face enhancer module to make it available for dynamic use.
@@ -138,66 +139,53 @@ async def set_live_source_endpoint(file: UploadFile = File(...)):
 
 JOBS = {} # To store job status and results
 
-def process_batch_job_sync(job_id: str, source_path: str, target_path: str, output_path: str, options: dict):
+def process_batch_job_sync(job_id: str, source_path: str, target_path: str, output_path: str, context: ProcessingContext):
     """
     The core processing logic for a batch job. Runs in a background thread.
-    This function temporarily modifies modules.globals for the processing functions to work.
+    This function now uses a ProcessingContext object to avoid global state modification.
     """
     # Import utilities here to avoid circular dependencies at startup
     from modules.utilities import create_temp, extract_frames, get_temp_frame_paths, detect_fps, create_video, restore_audio, move_temp, clean_temp
 
-    # Store original global values to restore them later
-    original_globals = {
-        'source_path': modules.globals.source_path,
-        'target_path': modules.globals.target_path,
-        'output_path': modules.globals.output_path,
-    }
-    for key in options.keys():
-        if hasattr(modules.globals, key):
-            original_globals[key] = getattr(modules.globals, key)
-
     try:
-        # Set globals for this specific job
-        modules.globals.source_path = source_path
-        modules.globals.target_path = target_path
-        modules.globals.output_path = output_path
-        for key, value in options.items():
-            if hasattr(modules.globals, key):
-                setattr(modules.globals, key, value)
-
+        # Update context with paths for internal use by utilities and processors
+        context.source_path = source_path
+        context.target_path = target_path
+        context.output_path = output_path
+        
         if is_image(target_path):
             shutil.copy2(target_path, output_path)
 
-            active_processors = modules.globals.frame_processors.copy()
-            if modules.globals.fp_ui.get('face_enhancer'):
+            active_processors = context.frame_processors.copy()
+            if context.fp_ui.get('face_enhancer'):
                 active_processors.append('face_enhancer')
 
             for frame_processor in get_frame_processors_modules(active_processors):
-                frame_processor.process_image(source_path, output_path, output_path)
+                frame_processor.process_image(source_path, output_path, output_path, context) # Pass context
         elif is_video(target_path):
-            create_temp(target_path)
-            extract_frames(target_path)
-            temp_frame_paths = get_temp_frame_paths(target_path)
+            create_temp(target_path) # This utility needs target_path, which is now in context
+            extract_frames(target_path) # This utility needs target_path
+            temp_frame_paths = get_temp_frame_paths(target_path) # This utility needs target_path
             
-            active_processors = modules.globals.frame_processors.copy()
-            if modules.globals.fp_ui.get('face_enhancer'):
+            active_processors = context.frame_processors.copy()
+            if context.fp_ui.get('face_enhancer'):
                 active_processors.append('face_enhancer')
 
             for frame_processor in get_frame_processors_modules(active_processors):
-                frame_processor.process_video(source_path, temp_frame_paths)
+                frame_processor.process_video(source_path, temp_frame_paths, context)
             
-            if modules.globals.keep_fps:
+            if context.keep_fps:
                 fps = detect_fps(target_path)
-                create_video(target_path, fps)
+                create_video(target_path, fps, context) # Pass context
             else:
-                create_video(target_path, 30.0)
+                create_video(target_path, 30.0, context) # Pass context
 
-            if modules.globals.keep_audio:
-                restore_audio(target_path, output_path)
+            if context.keep_audio:
+                restore_audio(target_path, output_path) # This utility needs output_path
             else:
-                move_temp(target_path, output_path)
+                move_temp(target_path, output_path) # This utility needs output_path
             
-            clean_temp(target_path) # This function respects modules.globals.keep_frames
+            clean_temp(target_path, context) # This function now respects context.keep_frames
         
         JOBS[job_id]['status'] = 'completed'
         JOBS[job_id]['result_path'] = output_path
@@ -206,10 +194,6 @@ def process_batch_job_sync(job_id: str, source_path: str, target_path: str, outp
         print(f"Job {job_id} failed: {e}")
         JOBS[job_id]['status'] = 'failed'
         JOBS[job_id]['error'] = str(e)
-    finally:
-        # Restore original globals to not affect other server operations
-        for key, value in original_globals.items():
-            setattr(modules.globals, key, value)
         
         # Clean up temporary source and target files
         if os.path.exists(source_path):
@@ -230,7 +214,8 @@ async def process_batch_job_endpoint(background_tasks: BackgroundTasks, source_f
     _, target_extension = os.path.splitext(target_file.filename)
     output_path = os.path.join(TEMP_SERVER_DIR, f"{job_id}_output{target_extension}")
     JOBS[job_id] = {"status": "processing", "result_path": None, "error": None}
-    background_tasks.add_task(process_batch_job_sync, job_id, source_path, target_path, output_path, options_dict)
+    processing_context = ProcessingContext(**options_dict) # Create context from client options
+    background_tasks.add_task(process_batch_job_sync, job_id, source_path, target_path, output_path, processing_context)
     return {"message": "Job initiated", "job_id": job_id}
 
 @app.get("/download-result/{job_id}")
@@ -292,16 +277,18 @@ def get_thread_local_models_and_source_face() -> tuple[Any, Any, Any]:
         }
 
     # Always re-analyze the source image to get a thread-local Face object.
-    # This is necessary because threads are reused across different live sessions,
-    # and we must not use a stale source_face from a previous session.
-    if LIVE_SOURCE_IMAGE is not None:
-        faces = _thread_local_data.face_analyser.get(LIVE_SOURCE_IMAGE)
-        if faces:
-            _thread_local_data.source_face = sorted(faces, key=lambda x: x.bbox[0])[0]
+    # This is optimized to only re-run analysis if the global source image has changed.
+    if not hasattr(_thread_local_data, 'source_image_id') or _thread_local_data.source_image_id != id(LIVE_SOURCE_IMAGE):
+        if LIVE_SOURCE_IMAGE is not None:
+            print(f"Thread {threading.get_ident()}: New source image detected. Re-analyzing.")
+            faces = _thread_local_data.face_analyser.get(LIVE_SOURCE_IMAGE)
+            if faces:
+                _thread_local_data.source_face = sorted(faces, key=lambda x: x.bbox[0])[0]
+            else:
+                _thread_local_data.source_face = None
         else:
             _thread_local_data.source_face = None
-    else:
-        _thread_local_data.source_face = None
+        _thread_local_data.source_image_id = id(LIVE_SOURCE_IMAGE)
         
     return (
         _thread_local_data.face_analyser,
@@ -309,23 +296,20 @@ def get_thread_local_models_and_source_face() -> tuple[Any, Any, Any]:
         _thread_local_data.source_face
     )
 
-def process_and_encode_sync(payload_data: str) -> str:
+def process_and_encode_sync(payload_data: str, context: ProcessingContext) -> str:
     """
     Synchronous function to handle all CPU-bound processing.
     This is run in a separate thread and uses thread-local models for safety.
     """
     # Get thread-local models. This will initialize them on the first call for this thread.
-    face_analyser, processors, source_face = get_thread_local_models_and_source_face()
+    # Note: get_thread_local_models_and_source_face still relies on LIVE_SOURCE_IMAGE global.
+    # For full isolation, LIVE_SOURCE_IMAGE should also be part of a context or passed explicitly.
+    face_analyser, processors, source_face = get_thread_local_models_and_source_face() 
 
     payload = json.loads(payload_data)
 
-    # Update server's global state with client's options
-    options = payload.get('options', {})
-    for key, value in options.items():
-        if hasattr(modules.globals, key):
-            setattr(modules.globals, key, value)
-    if 'fp_ui' in options:
-        modules.globals.fp_ui = options['fp_ui']
+    # Options are now directly from the context object passed from the WebSocket handler
+    # No need to update modules.globals here.
 
     if 'simple_map' in payload:
         modules.globals.simple_map = payload['simple_map']
@@ -338,21 +322,21 @@ def process_and_encode_sync(payload_data: str) -> str:
     processed_frame = frame
 
     # Build the list of active processors for this frame using thread-local instances
-    active_processor_modules = []
-    if 'face_swapper' in modules.globals.frame_processors:
+    active_processor_modules = [] # These are the actual processor module objects
+    if 'face_swapper' in context.frame_processors:
         active_processor_modules.append(processors['face_swapper'])
-    if modules.globals.fp_ui.get('face_enhancer'):
+    if context.fp_ui.get('face_enhancer'):
         active_processor_modules.append(processors['face_enhancer'])
 
-    if modules.globals.map_faces:
-        if modules.globals.simple_map:
+    if context.map_faces:
+        if context.simple_map: # Use context's simple_map
             for fp in active_processor_modules:
-                processed_frame = fp.process_frame_v2(processed_frame)
+                processed_frame = fp.process_frame_v2(processed_frame, context) # Pass context
         else:
             print("Server: simple_map not received for multi-face processing. Skipping.")
     elif source_face: # Use the thread-local source_face
         # Use the thread-local face_analyser to find faces in the target frame
-        if modules.globals.many_faces:
+        if context.many_faces:
             target_faces = face_analyser.get(processed_frame)
         else:
             target_faces = face_analyser.get(processed_frame)
@@ -362,7 +346,7 @@ def process_and_encode_sync(payload_data: str) -> str:
         
         if target_faces and target_faces[0] is not None:
             for fp in active_processor_modules:
-                processed_frame = fp.process_frame(source_face, processed_frame, target_faces)
+                processed_frame = fp.process_frame(source_face, processed_frame, target_faces, context) # Pass context
     
     # Encode the processed frame
     _, buffer = cv2.imencode('.jpg', processed_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -380,13 +364,17 @@ async def receive_frames(websocket: WebSocket, latest_frame: LatestFrame):
 async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFrame):
     """Task to process the latest available frame and send it back."""
     try:
+        # Create a context for this live session. Options are part of the payload.
         while True:
             payload_data = await latest_frame.get()
             if payload_data:
-                processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload_data)
+                payload = json.loads(payload_data)
+                options = payload.get('options', {})
+                context = ProcessingContext(**options)
+                processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload_data, context)
                 await websocket.send_text(processed_frame_b64)
             else:
-                await asyncio.sleep(0.01) # Avoid busy-waiting
+                await asyncio.sleep(0.01) # Avoid busy-waiting. The context should be created once per session.
     except WebSocketDisconnect:
         print("Processor task: WebSocket disconnected. Shutting down.")
 
@@ -394,7 +382,11 @@ async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFram
 async def websocket_live_preview(websocket: WebSocket):
     await websocket.accept()
     latest_frame = LatestFrame()
-
+    
+    # Initial context for the live session. This should be updated if client sends new options.
+    # For now, we'll create a default one. The options will be extracted from payload_data in process_and_encode_sync.
+    # A more robust solution would be to pass the context from the client's initial WebSocket connection.
+    
     receiver_task = asyncio.create_task(receive_frames(websocket, latest_frame))
     processor_task = asyncio.create_task(process_and_send_frames(websocket, latest_frame))
 

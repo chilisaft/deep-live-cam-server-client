@@ -3,7 +3,7 @@ import cv2
 import threading
 import torch
 
-from modules.typing import Frame
+from modules.typing import Frame, ProcessingContext
 from modules.utilities import resolve_relative_path, conditional_download
 
 _thread_local_face_enhancer = threading.local()
@@ -52,25 +52,25 @@ def enhance_face(target_face: Frame, temp_frame: Frame) -> Frame:
 	return temp_frame
 
 
-def process_frame(source_face: Any, temp_frame: Frame, target_faces: List[Any]) -> Frame:
+def process_frame(source_face: Any, temp_frame: Frame, target_faces: List[Any], context: ProcessingContext = None) -> Frame:
 	for target_face in target_faces:
 		temp_frame = enhance_face(target_face, temp_frame)
 	return temp_frame
 
 
-def process_image(source_path: str, target_path: str, output_path: str) -> None:
+def process_image(source_path: str, target_path: str, output_path: str, context: ProcessingContext = None) -> None:
 	from modules.core import update_status
 	target_frame = cv2.imread(target_path)
 	# In a real scenario, you'd get target faces herez
-	# result = process_frame(None, target_frame, get_many_faces(target_frame))
+	# result = process_frame(None, target_frame, get_many_faces(target_frame), context)
 	# cv2.imwrite(output_path, result)
 	update_status('Processing...', NAME)
 
 
-def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
+def process_video(source_path: str, temp_frame_paths: List[str], context: ProcessingContext = None) -> None:
 	from modules.core import update_status
 	update_status('Processing...', NAME)
 	# for temp_frame_path in temp_frame_paths:
 	# 	temp_frame = cv2.imread(temp_frame_path)
-	# 	result = process_frame(None, temp_frame, get_many_faces(temp_frame))
+	# 	result = process_frame(None, temp_frame, get_many_faces(temp_frame), context)
 	# 	cv2.imwrite(temp_frame_path, result)
