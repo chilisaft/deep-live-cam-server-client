@@ -6,23 +6,46 @@ requires-python = ">=3.9"
 
 # Core dependencies shared by both client and server
 dependencies = [
-    "numpy",
-    "opencv-python",
-    "requests"
+    "numpy>=1.23.5,<2",
+    "typing-extensions>=4.8.0",
+    "opencv-python==4.10.0.84",
+    "requests>=2.31.0",
+    "protobuf==4.23.2",
+    "tqdm>=4.66.2",
+    "pillow==11.1.0",
 ]
 
 [project.optional-dependencies]
 # Server-specific dependencies for ML processing and the API
 server = [
-    "fastapi",
-    "uvicorn[standard]",
-    "python-multipart",
+    "onnx==1.16.0",
     "insightface==0.7.3",
-    "onnxruntime-gpu==1.16.3", # For CPU-only servers, change this to "onnxruntime"
+    "psutil==5.9.8",
+    "fastapi==0.111.0",
+    "uvicorn[standard]==0.30.1",
+    "python-multipart>=0.0.9",
+    "onnxruntime-gpu==1.17.1", # Aligned with CUDA 12.x for stability
+    "tensorflow; sys_platform != 'darwin'", # TensorFlow is typically not used on macOS for GPU
+    "opennsfw2==0.10.2",
+    "gfpgan>=1.3.8",
+    "websockets>=12.0", # For WebSocket server in api/main.py
+    # PyTorch and torchvision are often required by ML libraries like insightface, gfpgan, or tensorflow
+    "torch==2.1.2+cu121; sys_platform != 'darwin'", # Aligned with system CUDA 12.x
+    "torch==2.1.2; sys_platform == 'darwin'",
+    "torchvision==0.16.2+cu121; sys_platform != 'darwin'", # Aligned with system CUDA 12.x
+    "torchvision==0.16.2; sys_platform == 'darwin'",
+    "onnxruntime-silicon==1.13.1; sys_platform == 'darwin' and platform_machine == 'arm64'", # For Apple Silicon
 ]
 
 # Client-specific dependencies for the GUI and communication
 client = [
-    "PyQt6", # Or another GUI library like PySide6, tkinter, etc.
-    "qasync" # Often used for running asyncio event loops with PyQt
+    "customtkinter==5.2.2",
+    "tk==0.1.0", # Required by customtkinter
+    "websocket-client>=1.8.0",  # For WebSocket client communication
+    "cv2_enumerate_cameras==1.1.15", # For listing available cameras in the UI
+    "pygrabber; platform_system == \"Windows\"",  # For Windows camera enumeration
 ]
+
+[tool.setuptools]
+# Explicitly list the packages to include to resolve the auto-discovery error.
+packages = ["api", "media", "models", "locales", "modules"]

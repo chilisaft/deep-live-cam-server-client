@@ -1,9 +1,13 @@
 import requests
 import os
 import base64
+import json
+import time
 import numpy as np
 import cv2
+from tqdm import tqdm
 import modules.globals # Import modules.globals
+
 
 class ReconstructedFace:
     """
@@ -14,9 +18,11 @@ class ReconstructedFace:
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+
 def get_server_url() -> str:
     """Constructs the server URL dynamically based on modules.globals.port."""
     return f"http://{modules.globals.server_ip}:{modules.globals.port}"
+
 
 def check_server_status() -> bool:
     """
@@ -32,6 +38,7 @@ def check_server_status() -> bool:
         print(f"API Client Error: Could not connect to server at {get_server_url()}.")
         print("Please ensure the server is running with 'python run.py --mode server'")
     return False
+
 
 def set_live_source(source_path: str) -> bool:
     """
@@ -54,6 +61,7 @@ def set_live_source(source_path: str) -> bool:
             print(f"API Client Error: Could not set live source on server.")
             print(f"Details: {e}")
             return False
+
 
 def request_face_analysis(target_path: str) -> list:
     """
@@ -82,6 +90,7 @@ def request_face_analysis(target_path: str) -> list:
             print("Please ensure the server is running with 'python run.py --mode server'")
             print(f"Details: {e}")
             return []
+
 
 def deserialize_face_map(serialized_map: list) -> list:
     """
@@ -118,6 +127,7 @@ def deserialize_face_map(serialized_map: list) -> list:
         reconstructed_map.append(reconstructed_item)
     return reconstructed_map
 
+
 def initiate_batch_processing(source_path: str, target_path: str, options: dict) -> dict:
     """
     Sends source and target files along with processing options to the server
@@ -148,23 +158,53 @@ def initiate_batch_processing(source_path: str, target_path: str, options: dict)
         if 'target_file' in files and files['target_file'][1]:
             files['target_file'][1].close()
 
-def download_processed_result(job_id: str, output_path: str) -> bool:
+
+def download_processed_result(job_id: str, output_path: str, headless: bool = False) -> bool:
     """
-    Downloads the processed file from the server for a given job_id.
+    Polls the server and downloads the processed file for a given job_id.
+    Includes a progress bar for user feedback.
     """
     endpoint = f"{get_server_url()}/download-result/{job_id}"
-    print(f"Client: Downloading result for job {job_id} to {output_path}")
 
-    try:
-        response = requests.get(endpoint, stream=True, timeout=3600) # Long timeout for download
-        response.raise_for_status()
+    # Polling loop
+    while True:
+        try:
+            # Use a shorter timeout for status checks, but a long one for the final download
+            response = requests.get(endpoint, stream=True, timeout=3600)
 
-        with open(output_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"Client: Download complete for job {job_id}.")
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"API Client Error: Could not download result for job {job_id}.")
-        print(f"Details: {e}")
-        return False
+            if response.status_code == 200:
+                # Success, file is ready for download
+                print(f"Client: Job {job_id} completed. Downloading result to {output_path}")
+
+                total_size = int(response.headers.get('content-length', 0))
+                progress_bar_desc = os.path.basename(output_path)
+
+                with open(output_path, 'wb') as f, tqdm(
+                    desc=progress_bar_desc,
+                    total=total_size,
+                    unit='iB',
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    disable=headless # Disable progress bar in headless mode to avoid clutter
+                ) as bar:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        size = f.write(chunk)
+                        bar.update(size)
+
+                print(f"Client: Download complete for job {job_id}.")
+                return True
+
+            elif response.status_code == 202:
+                # Job is still processing
+                print("Client: Job is still processing on the server, waiting...")
+                time.sleep(5)  # Wait 5 seconds before polling again
+                continue
+
+            else:
+                # Handle other statuses like 404 (Not Found) or 500 (Failed)
+                response.raise_for_status()
+
+        except requests.exceptions.RequestException as e:
+            error_message = e.response.json().get('message', 'Unknown error') if e.response else str(e)
+            print(f"API Client Error: Could not get result for job {job_id}. Server says: '{error_message}'")
+            return False

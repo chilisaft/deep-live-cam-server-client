@@ -16,10 +16,11 @@ import onnxruntime
 import tensorflow
 
 import modules.globals
+import modules.api_client as api_client
 import modules.metadata
 import modules.ui as ui
 from modules.processors.frame.core import get_frame_processors_modules
-from modules.utilities import has_image_extension, is_image, is_video, detect_fps, create_video, extract_frames, get_temp_frame_paths, restore_audio, create_temp, move_temp, clean_temp, normalize_output_path
+from modules.utilities import is_image, is_video, normalize_output_path
 
 if 'ROCMExecutionProvider' in modules.globals.execution_providers:
     del torch
@@ -181,104 +182,64 @@ def update_status(message: str, scope: str = 'DLC.CORE') -> None:
     if not modules.globals.headless and modules.globals.mode == 'client':
         ui.update_status(message)
 
-def process_video_pipeline() -> None:
-    """
-    Executes the video processing pipeline.
-    Assumes modules.globals is already populated with source_path, target_path, output_path, and all options.
-    """
-    update_status('Creating temp resources...')
-    create_temp(modules.globals.target_path)
-    update_status('Extracting frames...')
-    extract_frames(modules.globals.target_path)
 
-    temp_frame_paths = get_temp_frame_paths(modules.globals.target_path)
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        update_status('Progressing...', frame_processor.NAME)
-        frame_processor.process_video(modules.globals.source_path, temp_frame_paths)
-        release_resources()
-    
-    # handles fps
-    if modules.globals.keep_fps:
-        update_status('Detecting fps...')
-        fps = detect_fps(modules.globals.target_path)
-        update_status(f'Creating video with {fps} fps...')
-        create_video(modules.globals.target_path, fps)
-    else:
-        update_status('Creating video with 30.0 fps...')
-        create_video(modules.globals.target_path)
-    
-    # handle audio
-    if modules.globals.keep_audio:
-        if modules.globals.keep_fps:
-            update_status('Restoring audio...')
-        else:
-            update_status('Restoring audio might cause issues as fps are not kept...')
-        restore_audio(modules.globals.target_path, modules.globals.output_path)
-    else:
-        move_temp(modules.globals.target_path, modules.globals.output_path)
-    
-    # clean and validate
-    clean_temp(modules.globals.target_path)
-    if is_video(modules.globals.target_path):
-        update_status('Processing to video succeed!')
-    else:
-        update_status('Processing to video failed!')
+def run_headless_client() -> None:
+    """
+    Runs the application in headless client mode.
+    It sends a batch processing job to the server and waits for the result.
+    """
+    update_status("Running in headless client mode.", 'DLC.CLIENT')
 
-def process_image_pipeline() -> None:
-    """
-    Executes the image processing pipeline.
-    Assumes modules.globals is already populated with source_path, target_path, output_path, and all options.
-    """
-    update_status('Processing image...', 'DLC.CORE')
-    # Copy target to output path first, as processors modify in-place
-    try:
-        shutil.copy2(modules.globals.target_path, modules.globals.output_path)
-    except Exception as e:
-        update_status(f"Error copying target image to output path: {e}", 'DLC.CORE')
+    # Validate required paths
+    if not modules.globals.source_path or not modules.globals.target_path or not modules.globals.output_path:
+        update_status("Source, target, and output paths are required for headless mode.", 'DLC.CLIENT')
         return
 
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        update_status('Progressing...', frame_processor.NAME)
-        frame_processor.process_image(modules.globals.source_path, modules.globals.output_path, modules.globals.output_path)
-        release_resources()
+    # Check server connection
+    if not api_client.check_server_status():
+        update_status(f"Could not connect to the server at {api_client.get_server_url()}. Please ensure the server is running.", 'DLC.CLIENT')
+        return
 
-    if is_image(modules.globals.output_path): # Check if output is an image
-        update_status('Processing to image succeed!', 'DLC.CORE')
+    update_status("Connected to server. Preparing job...", 'DLC.CLIENT')
+
+    # Gather all relevant options from modules.globals
+    options = {
+        "frame_processors": modules.globals.frame_processors,
+        "keep_fps": modules.globals.keep_fps,
+        "keep_audio": modules.globals.keep_audio,
+        "keep_frames": modules.globals.keep_frames,
+        "many_faces": modules.globals.many_faces,
+        "map_faces": modules.globals.map_faces,
+        "color_correction": modules.globals.color_correction,
+        "nsfw_filter": modules.globals.nsfw_filter,
+        "video_encoder": modules.globals.video_encoder,
+        "video_quality": modules.globals.video_quality,
+        "mouth_mask": modules.globals.mouth_mask,
+        "simple_map": {} # Headless mode doesn't support interactive mapping
+    }
+
+    update_status("Sending job to server...", 'DLC.CLIENT')
+    response = api_client.initiate_batch_processing(
+        modules.globals.source_path,
+        modules.globals.target_path,
+        options
+    )
+
+    if response and response.get("job_id"):
+        job_id = response["job_id"]
+        update_status(f"Job {job_id} initiated on server. Polling for result...", 'DLC.CLIENT')
+        if api_client.download_processed_result(job_id, modules.globals.output_path):
+            update_status(f"Job {job_id} completed and result downloaded to {modules.globals.output_path}", 'DLC.CLIENT')
+        else:
+            update_status(f"Failed to download result for job {job_id}. Check server logs for details.", 'DLC.CLIENT')
     else:
-        update_status('Processing to image failed!', 'DLC.CORE')
+        error_message = response.get('message', 'Unknown error') if response else "No response from server"
+        update_status(f"Server failed to initiate job: {error_message}", 'DLC.CLIENT')
 
-
-def start() -> None:
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        if not frame_processor.pre_start():
-            return
-    update_status('Processing...')
-    # process image to image
-    if has_image_extension(modules.globals.target_path):
-        process_image_pipeline()
-    elif is_video(modules.globals.target_path):
-        process_video_pipeline()
-    else:
-        update_status("Unsupported target type for local batch processing.", 'DLC.CORE')
-
-
-def initiate_batch_job_client_side() -> None:
-    """
-    Client-side function to initiate a batch processing job on the server.
-    This is called by the UI or headless client.
-    """
-    # This function will be called by the UI's select_output_path or headless mode.
-    # It will gather options and call api_client.initiate_batch_processing.
-    # The actual implementation is in modules/ui.py and modules/api_client.py
-    # This placeholder is for conceptual clarity and to match the previous diff structure.
-    update_status("Initiating batch job via API client...", 'DLC.CLIENT')
-    # The real logic for gathering options and calling API is in ui.select_output_path
-    # and api_client.initiate_batch_processing.
-    # This function itself doesn't need to do anything here, as the UI handles the call.
-    pass
 def destroy(to_quit=True) -> None:
     if modules.globals.target_path:
-        clean_temp(modules.globals.target_path)
+        from modules.utilities import clean_temp
+        clean_temp(modules.globals.target_path) # Defer import to avoid circular dependency issues
     if to_quit: quit()
 
 
@@ -294,12 +255,13 @@ def run() -> None:
         from api.main import app # Import server components only when in server mode
         import uvicorn
         update_status('Starting server...', 'DLC.SERVER')
-        uvicorn.run(app, host="0.0.0.0", port=modules.globals.port) # Start the FastAPI server with dynamic port
-    else:  # Client mode
+        uvicorn.run(app, host="0.0.0.0", port=modules.globals.port)
+    elif modules.globals.mode == 'client':
         if modules.globals.headless: # Headless client mode (CLI)
-            update_status("Running in headless client mode.", 'DLC.CLIENT')
-            initiate_batch_job_client_side() # Trigger the client-side job initiation
-            update_status("Headless client job finished.", 'DLC.CLIENT')
+            run_headless_client()
         else: # UI client mode
-            window = ui.init(initiate_batch_job_client_side, destroy, modules.globals.lang) # Initialize the UI, passing the new initiator
-            window.mainloop() # Start the UI event loop
+            # The function passed to ui.init as the 'start' command is not used by the UI's
+            # "Start" button, which has its own hardcoded API call logic.
+            # We pass a no-op lambda for clarity, as it is not called.
+            window = ui.init(lambda: None, destroy, modules.globals.lang)
+            window.mainloop()
