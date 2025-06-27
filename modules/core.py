@@ -193,7 +193,7 @@ def pre_check() -> bool:
 def update_status(message: str, scope: str = 'DLC.CORE') -> None:
     print(f'[{scope}] {message}')
     # Only update UI if in client mode, not headless, and UI has been initialized (ui.ROOT is not None)
-    if not modules.globals.headless and modules.globals.mode == 'client' and ui.ROOT is not None:
+    if not modules.globals.headless and modules.globals.mode == 'client' and ui.ROOT is not None and ui.CLIENT_STATE is not None:
         ui.update_status(message)
 
 

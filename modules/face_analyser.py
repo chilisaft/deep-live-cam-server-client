@@ -39,35 +39,35 @@ def get_many_faces(frame: Frame) -> Any:
         return None
 
 def has_valid_map() -> bool:
-    for map in modules.globals.source_target_map:
+    for map in modules.globals.source_target_map: # This will be CLIENT_STATE.source_target_map
         if "source" in map and "target" in map:
             return True
     return False
 
 def default_source_face() -> Any:
-    for map in modules.globals.source_target_map:
+    for map in modules.globals.source_target_map: # This will be CLIENT_STATE.source_target_map
         if "source" in map:
             return map['source']['face']
     return None
 
-def simplify_maps() -> Any:
+def simplify_maps(source_target_map: list, simple_map: dict) -> Any:
     centroids = []
     faces = []
-    for map in modules.globals.source_target_map:
+    for map in source_target_map:
         if "source" in map and "target" in map:
             centroids.append(map['target']['face'].normed_embedding)
             faces.append(map['source']['face'])
 
-    modules.globals.simple_map = {'source_faces': faces, 'target_embeddings': centroids}
+    simple_map.update({'source_faces': faces, 'target_embeddings': centroids})
     return None
 
-def add_blank_map() -> Any:
+def add_blank_map(source_target_map: list) -> Any:
     try:
         max_id = -1
-        if len(modules.globals.source_target_map) > 0:
-            max_id = max(modules.globals.source_target_map, key=lambda x: x['id'])['id']
+        if len(source_target_map) > 0:
+            max_id = max(source_target_map, key=lambda x: x['id'])['id']
 
-        modules.globals.source_target_map.append({
+        source_target_map.append({
                 'id' : max_id + 1
                 })
     except ValueError:

@@ -1,7 +1,7 @@
 import os
 import webbrowser
 import customtkinter as ctk
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Any, List, Dict
 import cv2
 from cv2_enumerate_cameras import enumerate_cameras  # Add this import
 from PIL import Image, ImageOps
@@ -15,11 +15,7 @@ import websocket # Add this import
 import threading
 import queue
 import modules.api_client as api_client
-from modules.face_analyser import (
-    add_blank_map,
-    has_valid_map,
-    simplify_maps,
-)
+from modules.face_analyser import add_blank_map, has_valid_map, simplify_maps
 from modules.capturer import get_video_frame, get_video_frame_total
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import (
@@ -34,6 +30,48 @@ import platform
 
 if platform.system() == "Windows":
     from pygrabber.dshow_graph import FilterGraph
+
+
+class ClientState:
+    """
+    Manages the client-side UI state, including selected paths,
+    processing options, and mapping data.
+    """
+
+    def __init__(self):
+        self.source_target_map: List[Dict[str, Any]] = []
+        self.simple_map: Dict[str, Any] = {}
+
+        self.source_path: str = None
+        self.target_path: str = None
+        self.output_path: str = None
+
+        # UI Toggles and Options
+        self.keep_fps: bool = True
+        self.keep_audio: bool = True
+        self.keep_frames: bool = False
+        self.many_faces: bool = False
+        self.map_faces: bool = False
+        self.color_correction: bool = False
+        self.nsfw_filter: bool = False  # Currently unused in UI, but kept for consistency
+        self.video_encoder: str = "libx264"  # Default, can be overridden by CLI
+        self.video_quality: int = 18  # Default, can be overridden by CLI
+        self.live_mirror: bool = False
+        self.live_resizable: bool = False
+        self.fp_ui: Dict[str, bool] = {"face_enhancer": False}
+        self.webcam_preview_running: bool = False
+        self.show_fps: bool = False
+        self.mouth_mask: bool = False
+        self.show_mouth_mask_box: bool = False
+
+        # These are set by core.py from CLI args, but UI needs to know them
+        # They are not directly modified by UI switches, but reflect app config.
+        # We'll initialize them from modules.globals in init()
+        self.frame_processors: List[str] = []
+        self.server_ip: str = "127.0.0.1"
+        self.port: int = 8000
+        self.headless: bool = False
+
 
 ROOT = None
 POPUP = None
@@ -79,62 +117,71 @@ source_label_dict = {}
 source_label_dict_live = {}
 target_label_dict_live = {}
 
-img_ft, vid_ft = modules.globals.file_types
+_ = None # Initialized by LanguageManager
+
+CLIENT_STATE: ClientState = None # Global instance of ClientState
+
+img_ft, vid_ft = modules.globals.file_types # These are constants, keep in modules.globals
 
 
 def init(start: Callable[[], None], destroy: Callable[[], None], lang: str) -> ctk.CTk:
-    global ROOT, PREVIEW, _
+    global ROOT, PREVIEW, _, CLIENT_STATE
 
     lang_manager = LanguageManager(lang)
     _ = lang_manager._
+
+    CLIENT_STATE = ClientState()
+    # Initialize ClientState with values from modules.globals that are set by CLI args
+    CLIENT_STATE.frame_processors = modules.globals.frame_processors
+    CLIENT_STATE.server_ip = modules.globals.server_ip
+    CLIENT_STATE.port = modules.globals.port
+    CLIENT_STATE.headless = modules.globals.headless
+    CLIENT_STATE.fp_ui = modules.globals.fp_ui.copy() # Sync UI state with CLI args
+
     ROOT = create_root(start, destroy)
     PREVIEW = create_preview(ROOT)
 
     return ROOT
 
-
-def save_switch_states():
-    switch_states = {
-        "keep_fps": modules.globals.keep_fps,
-        "keep_audio": modules.globals.keep_audio,
-        "keep_frames": modules.globals.keep_frames,
-        "many_faces": modules.globals.many_faces,
-        "map_faces": modules.globals.map_faces,
-        "color_correction": modules.globals.color_correction,
-        "nsfw_filter": modules.globals.nsfw_filter,
-        "live_mirror": modules.globals.live_mirror,
-        "live_resizable": modules.globals.live_resizable,
-        "fp_ui": modules.globals.fp_ui,
-        "show_fps": modules.globals.show_fps,
-        "mouth_mask": modules.globals.mouth_mask,
-        "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-    }
-    with open("switch_states.json", "w") as f:
-        json.dump(switch_states, f)
-
-
 def load_switch_states():
     try:
         with open("switch_states.json", "r") as f:
             switch_states = json.load(f)
-        modules.globals.keep_fps = switch_states.get("keep_fps", True)
-        modules.globals.keep_audio = switch_states.get("keep_audio", True)
-        modules.globals.keep_frames = switch_states.get("keep_frames", False)
-        modules.globals.many_faces = switch_states.get("many_faces", False)
-        modules.globals.map_faces = switch_states.get("map_faces", False)
-        modules.globals.color_correction = switch_states.get("color_correction", False)
-        modules.globals.nsfw_filter = switch_states.get("nsfw_filter", False)
-        modules.globals.live_mirror = switch_states.get("live_mirror", False)
-        modules.globals.live_resizable = switch_states.get("live_resizable", False)
-        modules.globals.fp_ui = switch_states.get("fp_ui", {"face_enhancer": False})
-        modules.globals.show_fps = switch_states.get("show_fps", False)
-        modules.globals.mouth_mask = switch_states.get("mouth_mask", False)
-        modules.globals.show_mouth_mask_box = switch_states.get(
-            "show_mouth_mask_box", False
-        )
+        CLIENT_STATE.keep_fps = switch_states.get("keep_fps", True)
+        CLIENT_STATE.keep_audio = switch_states.get("keep_audio", True)
+        CLIENT_STATE.keep_frames = switch_states.get("keep_frames", False)
+        CLIENT_STATE.many_faces = switch_states.get("many_faces", False)
+        CLIENT_STATE.map_faces = switch_states.get("map_faces", False)
+        CLIENT_STATE.color_correction = switch_states.get("color_correction", False)
+        CLIENT_STATE.nsfw_filter = switch_states.get("nsfw_filter", False)
+        CLIENT_STATE.live_mirror = switch_states.get("live_mirror", False)
+        CLIENT_STATE.live_resizable = switch_states.get("live_resizable", False)
+        CLIENT_STATE.fp_ui = switch_states.get("fp_ui", {"face_enhancer": False})
+        CLIENT_STATE.show_fps = switch_states.get("show_fps", False)
+        CLIENT_STATE.mouth_mask = switch_states.get("mouth_mask", False)
+        CLIENT_STATE.show_mouth_mask_box = switch_states.get("show_mouth_mask_box", False)
     except FileNotFoundError:
         # If the file doesn't exist, use default values
         pass
+
+def save_switch_states():
+    switch_states = {
+        "keep_fps": CLIENT_STATE.keep_fps,
+        "keep_audio": CLIENT_STATE.keep_audio,
+        "keep_frames": CLIENT_STATE.keep_frames,
+        "many_faces": CLIENT_STATE.many_faces,
+        "map_faces": CLIENT_STATE.map_faces,
+        "color_correction": CLIENT_STATE.color_correction,
+        "nsfw_filter": CLIENT_STATE.nsfw_filter,
+        "live_mirror": CLIENT_STATE.live_mirror,
+        "live_resizable": CLIENT_STATE.live_resizable,
+        "fp_ui": CLIENT_STATE.fp_ui,
+        "show_fps": CLIENT_STATE.show_fps,
+        "mouth_mask": CLIENT_STATE.mouth_mask,
+        "show_mouth_mask_box": CLIENT_STATE.show_mouth_mask_box,
+    }
+    with open("switch_states.json", "w") as f:
+        json.dump(switch_states, f)
 
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
@@ -165,10 +212,10 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     select_face_button.place(relx=0.1, rely=0.4, relwidth=0.3, relheight=0.1)
 
-    swap_faces_button = ctk.CTkButton(
-        root, text="↔", cursor="hand2", command=lambda: swap_faces_paths()
+    swap_paths_button = ctk.CTkButton(
+        root, text="↔", cursor="hand2", command=lambda: swap_paths()
     )
-    swap_faces_button.place(relx=0.45, rely=0.4, relwidth=0.1, relheight=0.1)
+    swap_paths_button.place(relx=0.45, rely=0.4, relwidth=0.1, relheight=0.1)
 
     select_target_button = ctk.CTkButton(
         root,
@@ -178,33 +225,33 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     select_target_button.place(relx=0.6, rely=0.4, relwidth=0.3, relheight=0.1)
 
-    keep_fps_value = ctk.BooleanVar(value=modules.globals.keep_fps)
+    keep_fps_value = ctk.BooleanVar(value=CLIENT_STATE.keep_fps)
     keep_fps_checkbox = ctk.CTkSwitch(
         root,
         text=_("Keep fps"),
         variable=keep_fps_value,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "keep_fps", keep_fps_value.get()),
+            setattr(CLIENT_STATE, "keep_fps", keep_fps_value.get()),
             save_switch_states(),
         ),
     )
     keep_fps_checkbox.place(relx=0.1, rely=0.6)
 
-    keep_frames_value = ctk.BooleanVar(value=modules.globals.keep_frames)
+    keep_frames_value = ctk.BooleanVar(value=CLIENT_STATE.keep_frames)
     keep_frames_switch = ctk.CTkSwitch(
         root,
         text=_("Keep frames"),
         variable=keep_frames_value,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "keep_frames", keep_frames_value.get()),
+            setattr(CLIENT_STATE, "keep_frames", keep_frames_value.get()),
             save_switch_states(),
         ),
     )
     keep_frames_switch.place(relx=0.1, rely=0.65)
 
-    enhancer_value = ctk.BooleanVar(value=modules.globals.fp_ui["face_enhancer"])
+    enhancer_value = ctk.BooleanVar(value=CLIENT_STATE.fp_ui["face_enhancer"])
     enhancer_switch = ctk.CTkSwitch(
         root,
         text=_("Face Enhancer"),
@@ -217,40 +264,40 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     enhancer_switch.place(relx=0.1, rely=0.7)
 
-    keep_audio_value = ctk.BooleanVar(value=modules.globals.keep_audio)
+    keep_audio_value = ctk.BooleanVar(value=CLIENT_STATE.keep_audio)
     keep_audio_switch = ctk.CTkSwitch(
         root,
         text=_("Keep audio"),
         variable=keep_audio_value,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "keep_audio", keep_audio_value.get()),
+            setattr(CLIENT_STATE, "keep_audio", keep_audio_value.get()),
             save_switch_states(),
         ),
     )
     keep_audio_switch.place(relx=0.6, rely=0.6)
 
-    many_faces_value = ctk.BooleanVar(value=modules.globals.many_faces)
+    many_faces_value = ctk.BooleanVar(value=CLIENT_STATE.many_faces)
     many_faces_switch = ctk.CTkSwitch(
         root,
         text=_("Many faces"),
         variable=many_faces_value,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "many_faces", many_faces_value.get()),
+            setattr(CLIENT_STATE, "many_faces", many_faces_value.get()),
             save_switch_states(),
         ),
     )
     many_faces_switch.place(relx=0.6, rely=0.65)
 
-    color_correction_value = ctk.BooleanVar(value=modules.globals.color_correction)
+    color_correction_value = ctk.BooleanVar(value=CLIENT_STATE.color_correction)
     color_correction_switch = ctk.CTkSwitch(
         root,
         text=_("Fix Blueish Cam"),
         variable=color_correction_value,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "color_correction", color_correction_value.get()),
+            setattr(CLIENT_STATE, "color_correction", color_correction_value.get()),
             save_switch_states(),
         ),
     )
@@ -260,51 +307,51 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     #    nsfw_switch = ctk.CTkSwitch(root, text='NSFW filter', variable=nsfw_value, cursor='hand2', command=lambda: setattr(modules.globals, 'nsfw_filter', nsfw_value.get()))
     #    nsfw_switch.place(relx=0.6, rely=0.7)
 
-    map_faces = ctk.BooleanVar(value=modules.globals.map_faces)
+    map_faces = ctk.BooleanVar(value=CLIENT_STATE.map_faces)
     map_faces_switch = ctk.CTkSwitch(
         root,
         text=_("Map faces"),
         variable=map_faces,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "map_faces", map_faces.get()),
+            setattr(CLIENT_STATE, "map_faces", map_faces.get()),
             save_switch_states(),
             close_mapper_window() if not map_faces.get() else None
         ),
     )
     map_faces_switch.place(relx=0.1, rely=0.75)
 
-    show_fps_value = ctk.BooleanVar(value=modules.globals.show_fps)
+    show_fps_value = ctk.BooleanVar(value=CLIENT_STATE.show_fps)
     show_fps_switch = ctk.CTkSwitch(
         root,
         text=_("Show FPS"),
         variable=show_fps_value,
         cursor="hand2",
         command=lambda: (
-            setattr(modules.globals, "show_fps", show_fps_value.get()),
+            setattr(CLIENT_STATE, "show_fps", show_fps_value.get()),
             save_switch_states(),
         ),
     )
     show_fps_switch.place(relx=0.6, rely=0.75)
 
-    mouth_mask_var = ctk.BooleanVar(value=modules.globals.mouth_mask)
+    mouth_mask_var = ctk.BooleanVar(value=CLIENT_STATE.mouth_mask)
     mouth_mask_switch = ctk.CTkSwitch(
         root,
         text=_("Mouth Mask"),
         variable=mouth_mask_var,
         cursor="hand2",
-        command=lambda: setattr(modules.globals, "mouth_mask", mouth_mask_var.get()),
+        command=lambda: setattr(CLIENT_STATE, "mouth_mask", mouth_mask_var.get()),
     )
     mouth_mask_switch.place(relx=0.1, rely=0.55)
 
-    show_mouth_mask_box_var = ctk.BooleanVar(value=modules.globals.show_mouth_mask_box)
+    show_mouth_mask_box_var = ctk.BooleanVar(value=CLIENT_STATE.show_mouth_mask_box)
     show_mouth_mask_box_switch = ctk.CTkSwitch(
         root,
         text=_("Show Mouth Mask Box"),
         variable=show_mouth_mask_box_var,
         cursor="hand2",
         command=lambda: setattr(
-            modules.globals, "show_mouth_mask_box", show_mouth_mask_box_var.get()
+            CLIENT_STATE, "show_mouth_mask_box", show_mouth_mask_box_var.get()
         ),
     )
     show_mouth_mask_box_switch.place(relx=0.6, rely=0.55)
@@ -370,7 +417,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     live_button.place(relx=0.65, rely=0.86, relwidth=0.2, relheight=0.05)
     # --- End Camera Selection ---
-
+    
     status_label = ctk.CTkLabel(root, text=None, justify="center")
     status_label.place(relx=0.1, rely=0.9, relwidth=0.8)
 
@@ -409,14 +456,14 @@ def analyze_target(start: Callable[[], None]):
         return
 
     if modules.globals.map_faces:
-        if not modules.globals.target_path:
+        if not CLIENT_STATE.target_path:
             update_status("Please select a target first.")
             return
 
         update_status("Requesting face analysis from server...")
         # Call the API client instead of local functions
-        source_target_map = api_client.request_face_analysis(modules.globals.target_path)
-        modules.globals.source_target_map = source_target_map  # Store result in globals for the popup
+        source_target_map = api_client.request_face_analysis(CLIENT_STATE.target_path)
+        CLIENT_STATE.source_target_map = source_target_map  # Store result in client state for the popup
 
         if source_target_map:
             update_status(f"Found {len(source_target_map)} unique faces.")
@@ -590,10 +637,10 @@ def update_pop_live_status(text: str) -> None:
 
 
 def update_tumbler(var: str, value: bool) -> None:
-    modules.globals.fp_ui[var] = value
+    CLIENT_STATE.fp_ui[var] = value
     save_switch_states()
     # If we're currently in a live preview, update the frame processors
-    if PREVIEW.state() == "normal":
+    if PREVIEW.state() == "normal" and CLIENT_STATE.webcam_preview_running:
         global frame_processors
         frame_processors = get_frame_processors_modules(
             modules.globals.frame_processors
@@ -609,13 +656,13 @@ def select_source_path() -> None:
         initialdir=RECENT_DIRECTORY_SOURCE,
         filetypes=[img_ft],
     )
-    if is_image(source_path):
-        modules.globals.source_path = source_path
-        RECENT_DIRECTORY_SOURCE = os.path.dirname(modules.globals.source_path)
-        image = render_image_preview(modules.globals.source_path, (200, 200))
+    if is_image(source_path): # modules.globals.source_path is now CLIENT_STATE.source_path
+        CLIENT_STATE.source_path = source_path
+        RECENT_DIRECTORY_SOURCE = os.path.dirname(CLIENT_STATE.source_path)
+        image = render_image_preview(CLIENT_STATE.source_path, (200, 200))
         source_label.configure(image=image)
     else:
-        modules.globals.source_path = None
+        CLIENT_STATE.source_path = None
         source_label.configure(image=None)
 
 
@@ -623,23 +670,23 @@ def swap_faces_paths() -> None:
     global RECENT_DIRECTORY_SOURCE, RECENT_DIRECTORY_TARGET
 
     source_path = modules.globals.source_path
-    target_path = modules.globals.target_path
+    target_path = CLIENT_STATE.target_path
 
     if not is_image(source_path) or not is_image(target_path):
         return
 
-    modules.globals.source_path = target_path
-    modules.globals.target_path = source_path
+    CLIENT_STATE.source_path = target_path
+    CLIENT_STATE.target_path = source_path
 
-    RECENT_DIRECTORY_SOURCE = os.path.dirname(modules.globals.source_path)
-    RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
+    RECENT_DIRECTORY_SOURCE = os.path.dirname(CLIENT_STATE.source_path)
+    RECENT_DIRECTORY_TARGET = os.path.dirname(CLIENT_STATE.target_path)
 
     PREVIEW.withdraw()
 
-    source_image = render_image_preview(modules.globals.source_path, (200, 200))
+    source_image = render_image_preview(CLIENT_STATE.source_path, (200, 200))
     source_label.configure(image=source_image)
 
-    target_image = render_image_preview(modules.globals.target_path, (200, 200))
+    target_image = render_image_preview(CLIENT_STATE.target_path, (200, 200))
     target_label.configure(image=target_image)
 
 
@@ -652,18 +699,18 @@ def select_target_path() -> None:
         initialdir=RECENT_DIRECTORY_TARGET,
         filetypes=[img_ft, vid_ft],
     )
-    if is_image(target_path):
-        modules.globals.target_path = target_path
-        RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
-        image = render_image_preview(modules.globals.target_path, (200, 200))
+    if is_image(target_path): # modules.globals.target_path is now CLIENT_STATE.target_path
+        CLIENT_STATE.target_path = target_path
+        RECENT_DIRECTORY_TARGET = os.path.dirname(CLIENT_STATE.target_path)
+        image = render_image_preview(CLIENT_STATE.target_path, (200, 200))
         target_label.configure(image=image)
-    elif is_video(target_path):
-        modules.globals.target_path = target_path
-        RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
+    elif is_video(target_path): # modules.globals.target_path is now CLIENT_STATE.target_path
+        CLIENT_STATE.target_path = target_path
+        RECENT_DIRECTORY_TARGET = os.path.dirname(CLIENT_STATE.target_path)
         video_frame = render_video_preview(target_path, (200, 200))
         target_label.configure(image=video_frame)
     else:
-        modules.globals.target_path = None
+        CLIENT_STATE.target_path = None
         target_label.configure(image=None)
 
 
@@ -671,7 +718,7 @@ def select_output_path(start: Callable[[], None]) -> None:
     global RECENT_DIRECTORY_OUTPUT, img_ft, vid_ft
 
     if is_image(modules.globals.target_path):
-        output_path = ctk.filedialog.asksaveasfilename(
+        output_path = ctk.filedialog.asksaveasfilename( # modules.globals.target_path is now CLIENT_STATE.target_path
             title=_("save image output file"),
             filetypes=[img_ft],
             defaultextension=".png",
@@ -679,7 +726,7 @@ def select_output_path(start: Callable[[], None]) -> None:
             initialdir=RECENT_DIRECTORY_OUTPUT,
         )
     elif is_video(modules.globals.target_path):
-        output_path = ctk.filedialog.asksaveasfilename(
+        output_path = ctk.filedialog.asksaveasfilename( # modules.globals.target_path is now CLIENT_STATE.target_path
             title=_("save video output file"),
             filetypes=[vid_ft],
             defaultextension=".mp4",
@@ -689,25 +736,25 @@ def select_output_path(start: Callable[[], None]) -> None:
     else:
         output_path = None
     if output_path:
-        modules.globals.output_path = output_path
-        RECENT_DIRECTORY_OUTPUT = os.path.dirname(modules.globals.output_path)
+        CLIENT_STATE.output_path = output_path
+        RECENT_DIRECTORY_OUTPUT = os.path.dirname(CLIENT_STATE.output_path)
         
         # Gather all relevant options from modules.globals
         options = {
-            "frame_processors": modules.globals.frame_processors,
-            "keep_fps": modules.globals.keep_fps,
-            "keep_audio": modules.globals.keep_audio,
-            "keep_frames": modules.globals.keep_frames,
-            "many_faces": modules.globals.many_faces,
-            "map_faces": modules.globals.map_faces,
-            "color_correction": modules.globals.color_correction,
-            "nsfw_filter": modules.globals.nsfw_filter,
-            "video_encoder": modules.globals.video_encoder,
-            "video_quality": modules.globals.video_quality,
-            "mouth_mask": modules.globals.mouth_mask,
-            "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-            "simple_map": modules.globals.simple_map, # For mapped faces
-            "source_target_map": modules.globals.source_target_map
+            "frame_processors": CLIENT_STATE.frame_processors, # This comes from CLI, not UI switch
+            "keep_fps": CLIENT_STATE.keep_fps,
+            "keep_audio": CLIENT_STATE.keep_audio,
+            "keep_frames": CLIENT_STATE.keep_frames,
+            "many_faces": CLIENT_STATE.many_faces,
+            "map_faces": CLIENT_STATE.map_faces,
+            "color_correction": CLIENT_STATE.color_correction,
+            "nsfw_filter": CLIENT_STATE.nsfw_filter,
+            "video_encoder": CLIENT_STATE.video_encoder, # This comes from CLI, not UI switch
+            "video_quality": CLIENT_STATE.video_quality, # This comes from CLI, not UI switch
+            "mouth_mask": CLIENT_STATE.mouth_mask,
+            "show_mouth_mask_box": CLIENT_STATE.show_mouth_mask_box,
+            "simple_map": CLIENT_STATE.simple_map, # For mapped faces
+            "source_target_map": CLIENT_STATE.source_target_map
         }
 
         update_status("Sending job to server...")
@@ -718,10 +765,10 @@ def select_output_path(start: Callable[[], None]) -> None:
         )
 
         if response.get("job_id"):
-            job_id = response["job_id"]
-            update_status(f"Job {job_id} initiated on server. Downloading result...")
-            if api_client.download_processed_result(job_id, modules.globals.output_path):
-                update_status(f"Job {job_id} completed and result downloaded to {modules.globals.output_path}")
+            job_id = response["job_id"] # modules.globals.output_path is now CLIENT_STATE.output_path
+            update_status(f"Job {job_id} initiated on server. Downloading result...") 
+            if api_client.download_processed_result(job_id, CLIENT_STATE.output_path):
+                update_status(f"Job {job_id} completed and result downloaded to {CLIENT_STATE.output_path}")
             else:
                 update_status(f"Failed to download result for job {job_id}.")
         else:
@@ -797,7 +844,7 @@ def toggle_preview() -> None:
     # The live preview feature provides a better, server-based alternative.
     if PREVIEW.state() == "normal":
         PREVIEW.withdraw()
-    elif modules.globals.source_path and modules.globals.target_path:
+    elif CLIENT_STATE.source_path and CLIENT_STATE.target_path:
         # init_preview()
         # update_preview()
         pass
@@ -816,9 +863,9 @@ def init_preview() -> None:
 
 def update_preview(frame_number: int = 0) -> None:
     # This feature is disabled as it relies on local processing.
-    if modules.globals.source_path and modules.globals.target_path:
+    if CLIENT_STATE.source_path and CLIENT_STATE.target_path:
         update_status("Processing...")
-        temp_frame = get_video_frame(modules.globals.target_path, frame_number)
+        temp_frame = get_video_frame(CLIENT_STATE.target_path, frame_number)
         # The following block is disabled because it performs local processing.
         # if modules.globals.nsfw_filter and check_and_ignore_nsfw(temp_frame):
         #     return
@@ -839,28 +886,28 @@ def update_preview(frame_number: int = 0) -> None:
         PREVIEW.deiconify()
 
 
-def webcam_preview(root: ctk.CTk, camera_index: int):
+def webcam_preview(root: ctk.CTk, camera_index: int) -> None:
     global POPUP_LIVE
 
     if POPUP_LIVE and POPUP_LIVE.winfo_exists():
         update_status("Source x Target Mapper is already open.")
         POPUP_LIVE.focus()
         return
-
-    if modules.globals.map_faces:
+    
+    if CLIENT_STATE.map_faces:
         # For multi-face, we must first open the mapper UI to define the mappings.
         # If the map is empty, add a default blank entry to start with.
-        if not modules.globals.source_target_map:
-            add_blank_map()
-        create_source_target_popup_for_webcam(root, modules.globals.source_target_map, camera_index)
+        if not CLIENT_STATE.source_target_map:
+            add_blank_map(CLIENT_STATE.source_target_map) # Pass the list to modify
+        create_source_target_popup_for_webcam(root, CLIENT_STATE.source_target_map, camera_index)
     else:
         # For single-face mode, ensure a source is selected and set it on the server.
-        if modules.globals.source_path is None:
+        if CLIENT_STATE.source_path is None:
             update_status("Please select a source image first.")
             return
 
-        update_status("Setting source face on server...")
-        if not api_client.set_live_source(modules.globals.source_path):
+        update_status("Setting source face on server...") # modules.globals.source_path is now CLIENT_STATE.source_path
+        if not api_client.set_live_source(CLIENT_STATE.source_path):
             update_status("Could not set source face on server. Check server logs.")
             return
 
@@ -948,10 +995,11 @@ def create_networked_webcam_preview(camera_index: int) -> None:
     global PREVIEW, preview_label, ROOT
     ws = None
     cap = None
-    stop_event = threading.Event()
+    stop_event = threading.Event() # Event to signal stopping the threads
     frame_queue = queue.Queue(maxsize=2)  # Use a queue to pass frames from receiver to main thread
     can_send_frame = threading.Event() # Event to control frame sending rate
     can_send_frame.set() # Initially, we are allowed to send a frame
+    CLIENT_STATE.webcam_preview_running = True # Set global state for UI
 
     def receiver_thread(ws_socket: websocket.WebSocket, q: queue.Queue, stop: threading.Event, can_send: threading.Event) -> None:
         """Listens for incoming messages from the server and puts them in a queue."""
@@ -981,7 +1029,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
         update_status(f"Connecting to {ws_url}...")
         ws = websocket.create_connection(ws_url, timeout=30)
         update_status("Connected to live preview server.")
-
+        
         cap = VideoCapturer(camera_index)
         if not cap.start(PREVIEW_DEFAULT_WIDTH, PREVIEW_DEFAULT_HEIGHT, 30):
             raise RuntimeError("Failed to start camera")
@@ -1006,25 +1054,25 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 can_send_frame.clear() # Reset the event until the next response is received
 
                 frame_to_send = current_frame
-                if modules.globals.live_mirror:
+                if CLIENT_STATE.live_mirror:
                     frame_to_send = cv2.flip(frame_to_send, 1)
 
                 _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 65]) # Reduced quality for faster transfer
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
                 options = {
-                    "many_faces": modules.globals.many_faces,
-                    "map_faces": modules.globals.map_faces,
-                    "color_correction": modules.globals.color_correction,
-                    "mouth_mask": modules.globals.mouth_mask,
-                    "show_mouth_mask_box": modules.globals.show_mouth_mask_box,
-                    "fp_ui": modules.globals.fp_ui
+                    "many_faces": CLIENT_STATE.many_faces,
+                    "map_faces": CLIENT_STATE.map_faces,
+                    "color_correction": CLIENT_STATE.color_correction,
+                    "mouth_mask": CLIENT_STATE.mouth_mask,
+                    "show_mouth_mask_box": CLIENT_STATE.show_mouth_mask_box,
+                    "fp_ui": CLIENT_STATE.fp_ui
                 }
 
-                if modules.globals.map_faces:
+                if CLIENT_STATE.map_faces:
                     # For live preview, simple_map is used for multi-face mapping
-                    options['simple_map'] = modules.globals.simple_map
-                    options['source_target_map'] = modules.globals.source_target_map
+                    options['simple_map'] = CLIENT_STATE.simple_map
+                    options['source_target_map'] = CLIENT_STATE.source_target_map
 
                 payload_data = {'frame': frame_b64, 'options': options}
                 
@@ -1039,8 +1087,8 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 processed_frame = frame_queue.get_nowait()
                 new_frame_time = time.time()
                 if prev_frame_time > 0:
-                    fps = 1 / (new_frame_time - prev_frame_time)
-                    if modules.globals.show_fps:
+                    fps = 1 / (new_frame_time - prev_frame_time) # modules.globals.show_fps is now CLIENT_STATE.show_fps
+                    if CLIENT_STATE.show_fps:
                         cv2.putText(processed_frame, f"FPS: {int(fps)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 prev_frame_time = new_frame_time
                 image = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
@@ -1062,6 +1110,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
             ws.close()
         if cap:
             cap.release()
+        CLIENT_STATE.webcam_preview_running = False # Reset global state
         PREVIEW.withdraw()
         update_status("Live preview stopped.")
 
@@ -1076,16 +1125,16 @@ def create_source_target_popup_for_webcam(
     POPUP_LIVE.focus()
 
     def on_submit_click():
-        if has_valid_map():
-            simplify_maps()
+        if has_valid_map(CLIENT_STATE.source_target_map): # Pass the list to check
+            simplify_maps(CLIENT_STATE.source_target_map, CLIENT_STATE.simple_map) # Pass lists to modify
             update_pop_live_status("Mappings successfully submitted!")
             create_networked_webcam_preview(camera_index)  # Open the preview window
         else:
             update_pop_live_status("At least 1 source with target is required!")
 
     def on_add_click():
-        add_blank_map()
-        refresh_data(map)
+        add_blank_map(CLIENT_STATE.source_target_map) # Pass the list to modify
+        refresh_data(CLIENT_STATE.source_target_map)
         update_pop_live_status("Please provide mapping!")
 
     def on_clear_click():
@@ -1208,7 +1257,7 @@ def refresh_data(map: list):
 
 
 def update_webcam_source(
-    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int
+    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int # face_map is CLIENT_STATE.source_target_map
 ) -> None:
     global source_label_dict_live
 
@@ -1266,7 +1315,7 @@ def update_webcam_source(
 
 
 def update_webcam_target(
-    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int
+    scrollable_frame: ctk.CTkScrollableFrame, face_map: list, button_num: int # face_map is CLIENT_STATE.source_target_map
 ) -> None:
     global target_label_dict_live
 
