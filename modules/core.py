@@ -13,7 +13,6 @@ import argparse
 import modules.globals
 import modules.api_client as api_client
 import modules.metadata
-import modules.ui as ui
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, normalize_output_path
 
@@ -193,8 +192,10 @@ def pre_check() -> bool:
 def update_status(message: str, scope: str = 'DLC.CORE') -> None:
     print(f'[{scope}] {message}')
     # Only update UI if in client mode, not headless, and UI has been initialized (ui.ROOT is not None)
-    if not modules.globals.headless and modules.globals.mode == 'client' and ui.ROOT is not None and ui.CLIENT_STATE is not None:
-        ui.update_status(message)
+    if not modules.globals.headless and modules.globals.mode == 'client':
+        import modules.ui as ui
+        if ui.ROOT is not None and ui.CLIENT_STATE is not None:
+            ui.update_status(message)
 
 
 def run_headless_client() -> None:
@@ -261,9 +262,11 @@ def run() -> None:
     parse_args()
     if not pre_check():
         return
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        if not frame_processor.pre_check():
-            return
+    # Download models only when in server mode
+    if modules.globals.mode == 'server':
+        for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+            if not frame_processor.pre_check():
+                return
     limit_resources()
     if modules.globals.mode == 'server': # Server mode
         from api.main import app # Import server components only when in server mode
@@ -283,6 +286,7 @@ def run() -> None:
         if modules.globals.headless: # Headless client mode (CLI)
             run_headless_client()
         else: # UI client mode
+            import modules.ui as ui
             # The function passed to ui.init as the 'start' command is not used by the UI's
             # "Start" button, which has its own hardcoded API call logic.
             # We pass a no-op lambda for clarity, as it is not called.

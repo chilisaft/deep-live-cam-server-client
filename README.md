@@ -25,7 +25,7 @@ This project uses `pyproject.toml` for dependency management, allowing for separ
     *   **For the Server (with ML capabilities):**
         This will install FastAPI, Uvicorn, InsightFace, ONNX Runtime, and other necessary libraries for deepfake processing.
         ```bash
-        pip install -e .[server]
+        pip install -e .[server] --extra-index-url https://download.pytorch.org/whl/cu121
         ```
         **Note:** By default, `onnxruntime-gpu` is specified in `pyproject.toml`. If you are running on a CPU-only server, you will need to manually edit `pyproject.toml` to change `onnxruntime-gpu` to `onnxruntime` before running the installation command.
 
@@ -297,4 +297,3 @@ Looking for a CLI mode? Using the -s/--source argument will make the run program
 -   and [all developers](https://github.com/hacksider/Deep-Live-Cam/graphs/contributors) behind libraries used in this project.
 -   Footnote: Please be informed that the base author of the code is [s0md3v](https://github.com/s0md3v/roop)
 -   All the wonderful users who helped make this project go viral by starring the repo ❤️
-
