@@ -296,23 +296,16 @@ def get_thread_local_models_and_source_face() -> tuple[Any, Any, Any]:
         _thread_local_data.source_face
     )
 
-def process_and_encode_sync(payload_data: str, context: ProcessingContext) -> str:
+def process_and_encode_sync(payload: dict, context: ProcessingContext) -> str:
     """
     Synchronous function to handle all CPU-bound processing.
     This is run in a separate thread and uses thread-local models for safety.
     """
     # Get thread-local models. This will initialize them on the first call for this thread.
-    # Note: get_thread_local_models_and_source_face still relies on LIVE_SOURCE_IMAGE global.
-    # For full isolation, LIVE_SOURCE_IMAGE should also be part of a context or passed explicitly.
     face_analyser, processors, source_face = get_thread_local_models_and_source_face() 
 
-    payload = json.loads(payload_data)
-
-    # Options are now directly from the context object passed from the WebSocket handler
-    # No need to update modules.globals here.
-
-    if 'simple_map' in payload:
-        modules.globals.simple_map = payload['simple_map']
+    # The payload is now a pre-parsed dictionary.
+    # The context object is the single source of truth for all options.
 
     # Decode the frame
     frame_b64 = payload['frame']
@@ -361,20 +354,27 @@ async def receive_frames(websocket: WebSocket, latest_frame: LatestFrame):
     except WebSocketDisconnect:
         print("Receiver task: WebSocket disconnected. Shutting down.")
 
-async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFrame):
+async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFrame, context: ProcessingContext):
     """Task to process the latest available frame and send it back."""
+    last_options = {} # Keep track of the last options received to avoid redundant context updates
     try:
-        # Create a context for this live session. Options are part of the payload.
         while True:
             payload_data = await latest_frame.get()
             if payload_data:
                 payload = json.loads(payload_data)
                 options = payload.get('options', {})
-                context = ProcessingContext(**options)
-                processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload_data, context)
+
+                # Only update the context object if the options have actually changed.
+                if options != last_options:
+                    for key, value in options.items():
+                        if hasattr(context, key):
+                            setattr(context, key, value)
+                    last_options = options
+
+                processed_frame_b64 = await asyncio.to_thread(process_and_encode_sync, payload, context)
                 await websocket.send_text(processed_frame_b64)
             else:
-                await asyncio.sleep(0.01) # Avoid busy-waiting. The context should be created once per session.
+                await asyncio.sleep(0.01) # Avoid busy-waiting
     except WebSocketDisconnect:
         print("Processor task: WebSocket disconnected. Shutting down.")
 
@@ -382,13 +382,10 @@ async def process_and_send_frames(websocket: WebSocket, latest_frame: LatestFram
 async def websocket_live_preview(websocket: WebSocket):
     await websocket.accept()
     latest_frame = LatestFrame()
-    
-    # Initial context for the live session. This should be updated if client sends new options.
-    # For now, we'll create a default one. The options will be extracted from payload_data in process_and_encode_sync.
-    # A more robust solution would be to pass the context from the client's initial WebSocket connection.
-    
+    session_context = ProcessingContext() # Create a single context for the entire session
+
     receiver_task = asyncio.create_task(receive_frames(websocket, latest_frame))
-    processor_task = asyncio.create_task(process_and_send_frames(websocket, latest_frame))
+    processor_task = asyncio.create_task(process_and_send_frames(websocket, latest_frame, session_context))
 
     try:
         done, pending = await asyncio.wait(

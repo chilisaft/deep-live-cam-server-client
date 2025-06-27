@@ -212,10 +212,10 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     select_face_button.place(relx=0.1, rely=0.4, relwidth=0.3, relheight=0.1)
 
-    swap_paths_button = ctk.CTkButton(
-        root, text="↔", cursor="hand2", command=lambda: swap_paths()
+    swap_faces_button = ctk.CTkButton(
+        root, text="↔", cursor="hand2", command=lambda: swap_faces_paths()
     )
-    swap_paths_button.place(relx=0.45, rely=0.4, relwidth=0.1, relheight=0.1)
+    swap_faces_button.place(relx=0.45, rely=0.4, relwidth=0.1, relheight=0.1)
 
     select_target_button = ctk.CTkButton(
         root,
@@ -669,7 +669,7 @@ def select_source_path() -> None:
 def swap_faces_paths() -> None:
     global RECENT_DIRECTORY_SOURCE, RECENT_DIRECTORY_TARGET
 
-    source_path = modules.globals.source_path
+    source_path = CLIENT_STATE.source_path
     target_path = CLIENT_STATE.target_path
 
     if not is_image(source_path) or not is_image(target_path):
@@ -717,7 +717,7 @@ def select_target_path() -> None:
 def select_output_path(start: Callable[[], None]) -> None:
     global RECENT_DIRECTORY_OUTPUT, img_ft, vid_ft
 
-    if is_image(modules.globals.target_path):
+    if is_image(CLIENT_STATE.target_path):
         output_path = ctk.filedialog.asksaveasfilename( # modules.globals.target_path is now CLIENT_STATE.target_path
             title=_("save image output file"),
             filetypes=[img_ft],
@@ -725,7 +725,7 @@ def select_output_path(start: Callable[[], None]) -> None:
             initialfile="output.png",
             initialdir=RECENT_DIRECTORY_OUTPUT,
         )
-    elif is_video(modules.globals.target_path):
+    elif is_video(CLIENT_STATE.target_path):
         output_path = ctk.filedialog.asksaveasfilename( # modules.globals.target_path is now CLIENT_STATE.target_path
             title=_("save video output file"),
             filetypes=[vid_ft],
@@ -759,8 +759,8 @@ def select_output_path(start: Callable[[], None]) -> None:
 
         update_status("Sending job to server...")
         response = api_client.initiate_batch_processing(
-            modules.globals.source_path,
-            modules.globals.target_path,
+            CLIENT_STATE.source_path,
+            CLIENT_STATE.target_path,
             options
         )
 
@@ -1061,6 +1061,7 @@ def create_networked_webcam_preview(camera_index: int) -> None:
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
                 options = {
+                    "frame_processors": CLIENT_STATE.frame_processors,
                     "many_faces": CLIENT_STATE.many_faces,
                     "map_faces": CLIENT_STATE.map_faces,
                     "color_correction": CLIENT_STATE.color_correction,
